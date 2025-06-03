@@ -16,6 +16,9 @@ const subscriptionRoutes = require('./routes/subscriptionRoutes');
 const profileRoutes = require('./routes/profileRoutes'); // Added profile routes
 const countryRoutes = require('./routes/countryRoutes'); // Added country routes
 const dashboardRoutes = require('./routes/dashboardRoutes'); // Added dashboard routes
+const boostRoutes = require('./routes/boostRoutes');
+const anonymousBrowsingRoutes = require('./routes/anonymousBrowsingRoutes');
+const videoChatRoutes = require('./routes/videoChatRoutes');
 
 const app = express();
 
@@ -36,6 +39,11 @@ app.use(express.urlencoded({ extended: true }));
 const path = require('path');
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
+// General Request logging middleware - MOVED HERE
+app.use((req, res, next) => {
+  console.log('Request received:', req.method, req.path);
+  next();
+});
 
 // Routes
 app.use('/api/auth', authRoutes);
@@ -48,6 +56,9 @@ app.use('/api/subscription', subscriptionRoutes);
 app.use('/api/profile', profileRoutes); // Added profile routes
 app.use('/api/countries', countryRoutes); // Added country routes
 app.use('/api/dashboard', dashboardRoutes); // Added dashboard routes
+app.use('/api/boosts', boostRoutes);
+app.use('/api/browse/anonymous', anonymousBrowsingRoutes);
+app.use('/api/videochat', videoChatRoutes);
 
 // Add direct routes for backward compatibility with frontend
 app.get('/subscription/packages', (req, res) => {
@@ -60,11 +71,8 @@ app.get('/api/health', (req, res) => {
   res.json({ status: 'ok' });
 });
 
-// Add debug logging middleware
-app.use((req, res, next) => {
-  console.log('Request received:', req.method, req.path);
-  next();
-});
+// The moved general request logger above replaces this one.
+// This specific debug logging middleware instance is now removed.
 
 // Debug route for matches
 app.get('/api/debug/matches', async (req, res) => {
@@ -87,10 +95,7 @@ app.get('/api/debug/matches', async (req, res) => {
 });
 
 // Error handling middleware
-app.use((err, req, res, next) => {
-  console.error(err.stack);
-  res.status(500).json({ error: 'Something went wrong!' });
-});
+app.use(errorHandler); // Changed to use imported errorHandler
 
 // Start server
 const server = app.listen(env.PORT, () => {

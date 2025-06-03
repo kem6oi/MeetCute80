@@ -1,15 +1,16 @@
 const express = require('express');
 const router = express.Router();
 const boostController = require('../controllers/boostController');
-const { isAuthenticated } = require('../middleware/auth');
-const { checkSubscription, checkFeatureAccess } = require('../middleware/subscription'); // checkSubscription might not be needed if checkFeatureAccess implies it or handles subscription loading
+const { isAuthenticated, isUser } = require('../middleware/auth'); // Added isUser
+const { checkSubscription, checkFeatureAccess } = require('../middleware/subscription');
 
 // Activate a profile boost
 // Assuming 'profileBoost' is the feature_key in feature_permissions table
 router.post(
   '/activate',
   isAuthenticated,
-  checkSubscription, // Ensures req.subscription is populated for checkFeatureAccess
+  isUser, // Added isUser
+  checkSubscription,
   checkFeatureAccess('profileBoost'),
   boostController.activateBoost
 );
@@ -18,6 +19,7 @@ router.post(
 router.get(
   '/status',
   isAuthenticated,
+  isUser, // Added isUser
   boostController.getBoostStatus
 );
 

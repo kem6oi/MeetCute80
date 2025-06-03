@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const videoChatController = require('../controllers/videoChatController');
-const { isAuthenticated } = require('../middleware/auth');
+const { isAuthenticated, isUser } = require('../middleware/auth'); // Added isUser
 const { checkSubscription, checkFeatureAccess } = require('../middleware/subscription');
 
 // Assuming 'videoChat' is the feature_key
@@ -10,6 +10,7 @@ const { checkSubscription, checkFeatureAccess } = require('../middleware/subscri
 router.post(
   '/initiate',
   isAuthenticated,
+  isUser, // Added isUser
   checkSubscription,
   checkFeatureAccess('videoChat'),
   videoChatController.initiateVideoCall
@@ -19,6 +20,7 @@ router.post(
 router.post(
   '/accept', // Consider using a path parameter like /accept/:callId
   isAuthenticated,
+  isUser, // Added isUser
   checkSubscription,
   checkFeatureAccess('videoChat'),
   videoChatController.acceptVideoCall
@@ -28,6 +30,7 @@ router.post(
 router.post(
   '/signal', // Consider using a path parameter like /signal/:callId
   isAuthenticated,
+  isUser, // Added isUser
   checkSubscription,
   checkFeatureAccess('videoChat'),
   videoChatController.handleVideoCallSignaling
@@ -37,6 +40,7 @@ router.post(
 router.post(
   '/end', // Consider using a path parameter like /end/:callId
   isAuthenticated,
+  isUser, // Added isUser
   checkSubscription,
   checkFeatureAccess('videoChat'),
   videoChatController.endVideoCall

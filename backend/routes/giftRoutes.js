@@ -1,5 +1,5 @@
 const express = require('express');
-const { isAuthenticated, isAdmin } = require('../middleware/auth');
+const { isAuthenticated, isAdmin, isUser } = require('../middleware/auth'); // Added isUser
 const router = express.Router();
 const giftController = require('../controllers/giftController');
 
@@ -10,10 +10,10 @@ router.post('/items', isAuthenticated, isAdmin, giftController.createGiftItem);
 router.put('/items/:id', isAuthenticated, isAdmin, giftController.updateGiftItem);
 
 // User Gifts Routes
-router.post('/send', isAuthenticated, giftController.sendGift);
-router.get('/received', isAuthenticated, giftController.getReceivedGifts);
-router.get('/sent', isAuthenticated, giftController.getSentGifts);
-router.put('/read/:id', isAuthenticated, giftController.markGiftAsRead);
-router.get('/unread-count', isAuthenticated, giftController.getUnreadGiftCount);
+router.post('/send', isAuthenticated, isUser, giftController.sendGift); // Added isUser
+router.get('/received', isAuthenticated, isUser, giftController.getReceivedGifts); // Added isUser
+router.get('/sent', isAuthenticated, isUser, giftController.getSentGifts); // Added isUser
+router.put('/read/:id', isAuthenticated, isUser, giftController.markGiftAsRead); // Added isUser
+router.get('/unread-count', isAuthenticated, isUser, giftController.getUnreadGiftCount); // Added isUser
 
 module.exports = router; 

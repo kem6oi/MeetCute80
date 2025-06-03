@@ -3,7 +3,7 @@ const router = express.Router();
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs'); // Corrected: require('fs')
-const { isAuthenticated } = require('../middleware/auth');
+const { isAuthenticated, isUser } = require('../middleware/auth'); // Added isUser
 // checkPremiumFeature is removed, checkFeatureAccess is new
 const { checkSubscription, checkFeatureAccess } = require('../middleware/subscription');
 const { profileViewAnalyticsRateLimiter } = require('../middleware/rateLimiter'); // Added
@@ -43,7 +43,7 @@ const upload = multer({
 });
 
 // Get current user's profile (both /profile and /profile/me will work)
-router.get('/profile', isAuthenticated, async (req, res) => {
+router.get('/profile', isAuthenticated, isUser, async (req, res) => {
   try {
     const profile = await Profile.findByUserId(req.user.id);
     if (!profile) {
@@ -56,7 +56,7 @@ router.get('/profile', isAuthenticated, async (req, res) => {
   }
 });
 
-router.get('/profile/me', isAuthenticated, async (req, res) => {
+router.get('/profile/me', isAuthenticated, isUser, async (req, res) => {
   try {
     const profile = await Profile.findByUserId(req.user.id);
     if (!profile) {
@@ -70,7 +70,7 @@ router.get('/profile/me', isAuthenticated, async (req, res) => {
 });
 
 // Get profile by ID (requires subscription for non-matched profiles)
-router.get('/profile/:id', isAuthenticated, checkSubscription, async (req, res) => {
+router.get('/profile/:id', isAuthenticated, isUser, checkSubscription, async (req, res, next) => { // Added next for 'me' case
   try {
     // Skip if the ID is 'me' as it's handled by the route above
     if (req.params.id === 'me') {
@@ -108,7 +108,7 @@ router.get('/profile/:id', isAuthenticated, checkSubscription, async (req, res) 
 });
 
 // Create or update profile
-router.post('/profile', isAuthenticated, async (req, res) => {
+router.post('/profile', isAuthenticated, isUser, async (req, res) => {
   try {
     const { firstName, lastName, dob, gender, bio } = req.body;
     const profile = await Profile.createOrUpdate({
@@ -127,7 +127,7 @@ router.post('/profile', isAuthenticated, async (req, res) => {
 });
 
 // Update profile
-router.put('/profile', isAuthenticated, async (req, res) => {
+router.put('/profile', isAuthenticated, isUser, async (req, res) => {
   try {
     const { firstName, lastName, dob, gender, bio } = req.body;
     const profile = await Profile.createOrUpdate({
@@ -151,8 +151,9 @@ router.put('/profile', isAuthenticated, async (req, res) => {
 router.get(
   '/likes/received',
   isAuthenticated,
-  checkSubscription, // Ensures req.subscription is populated for checkFeatureAccess
-  checkFeatureAccess('whoLikesYou'), // 'whoLikesYou' is the assumed feature_key
+  isUser, // Added
+  checkSubscription,
+  checkFeatureAccess('whoLikesYou'),
   userController.getWhoLikedMe
 );
 
@@ -160,9 +161,10 @@ router.get(
 router.get(
   '/profile-views',
   isAuthenticated,
-  checkSubscription, // Ensures req.subscription is populated
-  checkFeatureAccess('profileViews'), // 'profileViews' is the assumed feature_key
-  profileViewAnalyticsRateLimiter, // Apply rate limiting
+  isUser, // Added
+  checkSubscription,
+  checkFeatureAccess('profileViews'),
+  profileViewAnalyticsRateLimiter,
   async (req, res) => {
     // TODO: Implement actual logic for fetching profile views
     // This might involve a new controller method in userController.js
@@ -177,8 +179,9 @@ router.get(
 router.get(
   '/advanced-matches',
   isAuthenticated,
-  checkSubscription, // Ensures req.subscription is populated
-  checkFeatureAccess('advancedMatching'), // 'advancedMatching' is the assumed feature_key
+  isUser, // Added
+  checkSubscription,
+  checkFeatureAccess('advancedMatching'),
   async (req, res) => {
     // TODO: Implement actual logic for fetching advanced matches
     // This might involve a new controller method
@@ -189,31 +192,11 @@ router.get(
 
 // Note: POST /profile-boost route was removed as it's now handled by boostRoutes.js
 
-// Route for uploading profile picture
-router.post('/profile/picture', isAuthenticated, upload.single('profilePicture'), async (req, res) => {
-  try {
-    if (!req.file) {
-      return res.status(400).json({ error: 'No file uploaded' });
-    }
-    
-    const filePath = req.file.path.replace(/\\/g, '/'); // Normalize path for all platforms
-    const profilePicture = `/uploads/profile_pictures/${path.basename(filePath)}`;
-    
-    // Update the profile picture path in the database
-    await pool.query(
-      'UPDATE profiles SET profile_picture = $1 WHERE user_id = $2',
-      [profilePicture, req.user.id]
-    );
-    
-    res.json({ success: true, profilePicture });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: 'Failed to upload profile picture' });
-  }
-});
+// Redundant route for uploading profile picture removed.
+// The canonical route is /api/profile/picture via profileRoutes.js
 
 // Route for marking profile as complete
-router.put('/profile/complete', isAuthenticated, async (req, res) => {
+router.put('/profile/complete', isAuthenticated, isUser, async (req, res) => {
   try {
     // Update the profile_complete flag in the users table
     await pool.query(

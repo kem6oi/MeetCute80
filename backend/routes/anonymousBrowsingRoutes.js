@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const anonymousBrowsingController = require('../controllers/anonymousBrowsingController');
-const { isAuthenticated } = require('../middleware/auth');
+const { isAuthenticated, isUser } = require('../middleware/auth'); // Added isUser
 const { checkSubscription, checkFeatureAccess } = require('../middleware/subscription');
 
 // Start anonymous browsing session
@@ -9,7 +9,8 @@ const { checkSubscription, checkFeatureAccess } = require('../middleware/subscri
 router.post(
   '/start',
   isAuthenticated,
-  checkSubscription, // Ensures req.subscription is populated
+  isUser, // Added isUser
+  checkSubscription,
   checkFeatureAccess('anonymousBrowsing'),
   anonymousBrowsingController.startAnonymousBrowsing
 );
@@ -18,6 +19,7 @@ router.post(
 router.post(
   '/stop',
   isAuthenticated,
+  isUser, // Added isUser
   anonymousBrowsingController.stopAnonymousBrowsing
 );
 
@@ -25,6 +27,7 @@ router.post(
 router.get(
   '/status',
   isAuthenticated,
+  isUser, // Added isUser
   anonymousBrowsingController.getAnonymousBrowsingStatus
 );
 

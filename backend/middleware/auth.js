@@ -58,7 +58,18 @@ const isAdmin = async (req, res, next) => {
   }
 };
 
+const isUser = (req, res, next) => {
+  if (req.user && req.user.role === 'user') {
+    next();
+  } else {
+    // If req.user is not defined, isAuthenticated might not have run or failed.
+    // Or, the role is not 'user'.
+    res.status(403).json({ error: 'Access denied. This action is for users only.' });
+  }
+};
+
 module.exports = {
   isAuthenticated,
-  isAdmin
+  isAdmin,
+  isUser
 };
