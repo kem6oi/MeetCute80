@@ -146,14 +146,23 @@ class Subscription {
     };
   }
 
+  /**
+   * @DEPRECATED - This method was part of the old Stripe-based flow and direct subscription creation.
+   * The new flow uses Transaction.initiate() followed by Transaction.verify() which then calls
+   * Subscription._activateSubscriptionWorkflow() to create subscription records.
+   * This method creates a 'pending_verification' user_subscription and a corresponding
+   * 'pending_verification' subscription_transaction.
+   * It should NOT be used for new subscriptions in the manual payment flow.
+   */
+  /*
   static async createUserSubscription({ userId, packageId, paymentMethodId }) {
+    // ... (original implementation commented out)
     const client = await pool.connect();
     try {
       await client.query('BEGIN');
 
-      // Get package details
       const packageResult = await client.query(
-        'SELECT id, name, price, billing_interval, tier_level, duration_months FROM subscription_packages WHERE id = $1', // Added tier_level, duration_months
+        'SELECT id, name, price, billing_interval, tier_level, duration_months FROM subscription_packages WHERE id = $1',
         [packageId]
       );
       const pkg = packageResult.rows[0];
@@ -162,7 +171,6 @@ class Subscription {
         throw new Error('Package not found');
       }
 
-      // Calculate end date based on package's duration_months or billing interval
       const endDate = new Date();
       if (pkg.duration_months) {
         endDate.setMonth(endDate.getMonth() + pkg.duration_months);
@@ -171,11 +179,9 @@ class Subscription {
       } else if (pkg.billing_interval === 'annually' || pkg.billing_interval === 'yearly') {
         endDate.setFullYear(endDate.getFullYear() + 1);
       } else {
-        endDate.setMonth(endDate.getMonth() + 1); // Default fallback
+        endDate.setMonth(endDate.getMonth() + 1);
       }
 
-
-      // Create subscription
       const subscriptionResult = await client.query(`
         INSERT INTO user_subscriptions (
           user_id, package_id, status, end_date, payment_method_id, auto_renew
@@ -184,7 +190,6 @@ class Subscription {
         RETURNING *
       `, [userId, packageId, endDate, paymentMethodId]);
 
-      // Create transaction record
       await client.query(`
         INSERT INTO subscription_transactions (
           subscription_id, amount, status, payment_method
@@ -193,11 +198,10 @@ class Subscription {
       `, [
         subscriptionResult.rows[0].id,
         pkg.price,
-        paymentMethodId || 'default_payment_method' // Use provided or a default
+        paymentMethodId || 'default_payment_method'
       ]);
 
-      // Update user role based on tier_level
-      if (pkg.tier_level) { // Ensure tier_level is available
+      if (pkg.tier_level) {
         await client.query(`
           UPDATE users
           SET role = $1
@@ -206,7 +210,6 @@ class Subscription {
       }
 
       await client.query('COMMIT');
-      // Return the subscription along with its features
       const newSubscription = subscriptionResult.rows[0];
       const featuresResult = await pool.query(`
             SELECT feature_name, feature_description
@@ -216,7 +219,7 @@ class Subscription {
 
       return {
           ...newSubscription,
-          package_details: pkg, // include package details for context
+          package_details: pkg,
           features: featuresResult.rows.map(f => ({ name: f.feature_name, description: f.feature_description }))
       };
 
@@ -227,6 +230,95 @@ class Subscription {
       client.release();
     }
   }
+  */
+
+  /**
+   * Internal method to activate a subscription and create related records.
+   * Assumes it's called within an existing database transaction (client passed).
+   * This is typically called after a payment transaction is verified.
+   * @param {Object} client - The database client from an existing transaction.
+   * @param {Object} details - Details for subscription activation.
+   * @param {number} details.userId - ID of the user.
+   * @param {number} details.packageId - ID of the subscription package.
+   * @param {number} details.originalTransactionId - ID of the main transaction from `transactions` table.
+   * @param {string} details.paymentMethodNameForLog - Name of the payment method for logging in subscription_transactions.
+   * @returns {Promise<number>} The ID of the newly created user_subscription.
+   * @throws {Error} If package not found or DB error occurs.
+   */
+  static async _activateSubscriptionWorkflow(client, { userId, packageId, originalTransactionId, paymentMethodNameForLog }) {
+    // 1. Fetch package details
+    const packageResult = await client.query(
+      'SELECT id, name, price, billing_interval, tier_level, duration_months FROM subscription_packages WHERE id = $1',
+      [packageId]
+    );
+    const pkg = packageResult.rows[0];
+
+    if (!pkg) {
+      throw new Error(`Package with ID ${packageId} not found during subscription activation.`);
+    }
+
+    // Step 1.A: Find and update any existing 'active' subscriptions for this user
+    const oldActiveSubsResult = await client.query(
+      `SELECT id FROM user_subscriptions WHERE user_id = $1 AND status = 'active'`,
+      [userId]
+    );
+
+    if (oldActiveSubsResult.rows.length > 0) {
+      for (const oldSub of oldActiveSubsResult.rows) {
+        await client.query(
+          `UPDATE user_subscriptions
+           SET status = 'cancelled', -- or 'superseded' if a distinct status is desired
+               auto_renew = false,
+               end_date = LEAST(end_date, CURRENT_TIMESTAMP), -- End now if not already past, or just CURRENT_TIMESTAMP
+               updated_at = CURRENT_TIMESTAMP
+           WHERE id = $1;`,
+          [oldSub.id]
+        );
+        console.log(`Subscription ${oldSub.id} for user ${userId} marked as cancelled due to new subscription activation.`);
+        // Note: Role demotion from these cancellations is implicitly handled because
+        // the new subscription's role will be applied immediately after this workflow.
+      }
+    }
+
+    // 2. Calculate end date for the new subscription
+    const endDate = new Date();
+    if (pkg.duration_months) {
+      endDate.setMonth(endDate.getMonth() + pkg.duration_months);
+    } else if (pkg.billing_interval === 'monthly') {
+      endDate.setMonth(endDate.getMonth() + 1);
+    } else if (pkg.billing_interval === 'annually' || pkg.billing_interval === 'yearly') {
+      endDate.setFullYear(endDate.getFullYear() + 1);
+    } else {
+      endDate.setMonth(endDate.getMonth() + 1); // Default fallback
+    }
+
+    // 3. Create user_subscriptions record
+    // payment_method_id in user_subscriptions will store the original transaction ID for traceability
+    const userSubscriptionResult = await client.query(`
+      INSERT INTO user_subscriptions (user_id, package_id, status, start_date, end_date, payment_method_id, auto_renew)
+      VALUES ($1, $2, 'active', CURRENT_TIMESTAMP, $3, $4, true)
+      RETURNING id;
+    `, [userId, packageId, endDate, originalTransactionId.toString()]);
+
+    const newUserSubscriptionId = userSubscriptionResult.rows[0].id;
+
+    // 4. Create subscription_transactions record
+    await client.query(`
+      INSERT INTO subscription_transactions (subscription_id, amount, status, payment_method)
+      VALUES ($1, $2, 'completed', $3);
+    `, [newUserSubscriptionId, pkg.price, paymentMethodNameForLog]);
+
+    // 5. Update user role if tier_level exists
+    if (pkg.tier_level) {
+      await client.query(
+        `UPDATE users SET role = $1 WHERE id = $2;`,
+        [pkg.tier_level.toLowerCase(), userId]
+      );
+    }
+
+    return newUserSubscriptionId;
+  }
+
 
   static async cancelSubscription(subscriptionId) {
     // Fetch the subscription to get user_id and potentially current role/tier for logging or other actions if needed

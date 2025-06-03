@@ -1,5 +1,6 @@
 const pool = require('../config/db');
 const PaymentMethod = require('./PaymentMethod'); // To fetch payment instructions
+const Subscription = require('./Subscription'); // For activating subscription
 
 class Transaction {
     /**
@@ -227,49 +228,24 @@ class Transaction {
             // 3. Fulfillment logic (if status is 'completed')
             if (newStatus === 'completed') {
                 if (updatedTransactionDetails.item_category === 'subscription') {
-                    // Find and activate the corresponding user_subscription
-                    // This assumes Subscription.createUserSubscription created a 'pending_verification' user_subscription
-                    const userSubUpdateResult = await client.query(
-                        `UPDATE user_subscriptions
-                         SET status = 'active',
-                             start_date = CURRENT_TIMESTAMP,
-                             -- Store our transaction.id as a reference. Ensure column type is compatible (VARCHAR).
-                             payment_method_id = $3
-                         WHERE user_id = $1 AND package_id = $2 AND status = 'pending_verification'
-                         ORDER BY created_at DESC -- In case multiple exist, activate the most recent pending one
-                         LIMIT 1
-                         RETURNING id, status;`,
-                        [updatedTransactionDetails.user_id, updatedTransactionDetails.payable_item_id, updatedTransactionDetails.id.toString()]
-                    );
+                    // Fetch payment method name for logging in subscription_transactions
+                    const pmType = await PaymentMethod.getTypeById(updatedTransactionDetails.payment_method_type_id);
+                    const paymentMethodName = pmType ? pmType.name : 'Unknown';
 
-                    if (userSubUpdateResult.rows.length > 0) {
-                        const activatedSubscriptionId = userSubUpdateResult.rows[0].id;
-
-                        // Fetch the payment method name using payment_method_type_id from the main transaction
-                        const pmType = await PaymentMethod.getTypeById(updatedTransactionDetails.payment_method_type_id);
-                        const paymentMethodName = pmType ? pmType.name : 'Unknown';
-
-
-                        // Update the corresponding subscription_transactions record
-                        await client.query(
-                            `UPDATE subscription_transactions
-                             SET status = 'completed',
-                                 payment_method = $2, -- Store the actual payment method name/code used
-                                 updated_at = CURRENT_TIMESTAMP
-                             WHERE subscription_id = $1 AND status = 'pending_verification'
-                             ORDER BY created_at DESC
-                             LIMIT 1;`,
-                            [activatedSubscriptionId, paymentMethodName]
-                        );
-                         console.log(`Subscription ${activatedSubscriptionId} activated and transaction ${transactionId} completed.`);
-                    } else {
+                    try {
+                        await Subscription._activateSubscriptionWorkflow(client, {
+                            userId: updatedTransactionDetails.user_id,
+                            packageId: updatedTransactionDetails.payable_item_id,
+                            originalTransactionId: updatedTransactionDetails.id,
+                            paymentMethodNameForLog: paymentMethodName
+                        });
+                        console.log(`Subscription activation workflow completed for transaction ${transactionId}. User: ${updatedTransactionDetails.user_id}, Package: ${updatedTransactionDetails.payable_item_id}`);
+                    } catch (activationError) {
                         // This is a critical issue: transaction completed but couldn't activate the service.
-                        console.warn(`CRITICAL: Transaction ${transactionId} completed for user ${updatedTransactionDetails.user_id}, package ${updatedTransactionDetails.payable_item_id}, but no 'pending_verification' user_subscription was found to activate.`);
-                        // Depending on business rules, you might:
-                        // 1. Throw an error here to ROLLBACK the entire operation.
-                        // 2. Let it commit and flag for manual review.
-                        // For now, it logs a warning and the transaction status update will commit.
-                        // throw new Error('Fulfillment failed: Could not find pending subscription to activate.');
+                        console.error(`CRITICAL: Fulfillment failed for transaction ${transactionId}. Error during _activateSubscriptionWorkflow: ${activationError.message}`);
+                        // To ensure atomicity of payment verification and service fulfillment,
+                        // we should re-throw the error to rollback the entire DB transaction.
+                        throw new Error(`Fulfillment failed for subscription: ${activationError.message}. Transaction ${transactionId} needs review.`);
                     }
                 } else if (updatedTransactionDetails.item_category === 'gift') {
                     // TODO: Implement gift fulfillment logic

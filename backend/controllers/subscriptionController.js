@@ -73,35 +73,41 @@ const subscriptionController = {
     }
   },
 
+  /*
+  // @DEPRECATED: Replaced by the new transaction flow.
+  // To subscribe, initiate a transaction via POST /api/transactions/initiate
+  // with itemCategory: 'subscription' and the relevant itemId (packageId).
   createSubscription: async (req, res) => {
     try {
       const { packageId, paymentMethodId } = req.body;
       
-      // Get the package details
       const pkg = await Subscription.getPackageById(packageId);
       if (!pkg) {
         return res.status(404).json({ message: 'Package not found' });
       }
 
-      // Create subscription (status will be pending_verification)
-      const newSubscription = await Subscription.createUserSubscription({
-        userId: req.user.id,
-        packageId,
-        paymentMethodId // This ID will be used for internal linking later
-      });
+      // This old method created 'pending_verification' user_subscriptions.
+      // The new flow creates user_subscriptions only upon successful transaction verification.
+      // const newSubscription = await Subscription.createUserSubscription({
+      //   userId: req.user.id,
+      //   packageId,
+      //   paymentMethodId
+      // });
 
-      res.status(201).json({
-        message: 'Subscription initiated, pending verification.',
-        subscription: newSubscription
-      });
+      // res.status(201).json({
+      //   message: 'Subscription initiated, pending verification.', // This message is no longer accurate for this old endpoint.
+      //   subscription: newSubscription
+      // });
+      return res.status(410).json({ message: 'This endpoint is deprecated. Please use the new transaction flow.' });
     } catch (err) {
-      console.error('Error creating subscription:', err);
+      console.error('Error in deprecated createSubscription:', err);
       res.status(500).json({
-        message: 'Failed to create subscription',
+        message: 'Failed to create subscription (deprecated endpoint)',
         error: err.message
       });
     }
   },
+  */
 
   cancelSubscription: async (req, res) => {
     try {
@@ -117,113 +123,30 @@ const subscriptionController = {
     }
   },
 
+  /*
+  // @DEPRECATED: Replaced by the new transaction flow.
+  // To upgrade/downgrade, user initiates a transaction for the new package.
+  // If successful, Transaction.verify will call Subscription._activateSubscriptionWorkflow.
+  // The logic to cancel the old subscription upon new one's activation needs to be
+  // robustly handled, possibly within _activateSubscriptionWorkflow or a service layer.
   upgradeSubscription: async (req, res) => {
-    const { newPackageId } = req.body;
-    const userId = req.user.id;
-
-    try {
-      const currentSubscription = await Subscription.getUserSubscription(userId);
-      if (!currentSubscription) {
-        return res.status(404).json({ message: 'No active subscription found to upgrade.' });
-      }
-
-      if (currentSubscription.package_id === newPackageId) {
-        return res.status(400).json({ message: 'Cannot upgrade to the same package.' });
-      }
-
-      const newPackage = await Subscription.getPackageById(newPackageId);
-      if (!newPackage) {
-        return res.status(404).json({ message: 'New package not found.' });
-      }
-
-      // Optional: Add more sophisticated upgrade logic (e.g., check price or tier_level hierarchy)
-      // For V1, any different package is considered an upgrade via this endpoint.
-
-      // Create Stripe payment intent for the new package
-      // Assuming paymentMethodId is re-used or a new one is provided by frontend if necessary.
-      // For simplicity, this example assumes the frontend handles collecting a new paymentMethodId if needed
-      // and passes it. If not, we might need to use a saved payment method.
-      // This example proceeds as if a new payment intent is made for the full price of the new package.
-      const paymentMethodIdFromBody = req.body.paymentMethodId;
-      if (!paymentMethodIdFromBody) {
-          // Attempt to use existing payment method from current subscription if available and appropriate
-          // This part is complex and depends on how payment methods are stored and managed.
-          // For V1, requiring paymentMethodId for upgrade is simpler.
-          return res.status(400).json({ message: 'Payment method ID is required for upgrade.' });
-      }
-
-      // Cancel the old subscription - This might need to be conditional based on new subscription success
-      // For now, proceed with cancellation then creation.
-      // Consider if cancellation should only happen *after* new one is 'active' (future step).
-      await Subscription.cancelSubscription(currentSubscription.id);
-
-      // Create the new subscription (status will be pending_verification)
-      const newSubscriptionData = await Subscription.createUserSubscription({
-        userId,
-        packageId: newPackageId,
-        paymentMethodId: paymentMethodIdFromBody // This ID will be used for internal linking later
-      });
-
-      res.status(201).json({
-        message: 'Subscription upgrade initiated, pending verification.',
-        subscription: newSubscriptionData
-      });
-
-    } catch (err) {
-      console.error('Error upgrading subscription:', err);
-      res.status(500).json({ message: 'Failed to upgrade subscription.', error: err.message });
-    }
+    // const { newPackageId } = req.body;
+    // const userId = req.user.id;
+    // ... (original implementation commented out) ...
+    return res.status(410).json({ message: 'This endpoint is deprecated. Please use the new transaction flow for new packages.' });
   },
+  */
 
+  /*
+  // @DEPRECATED: Replaced by the new transaction flow.
+  // See comments for upgradeSubscription.
   downgradeSubscription: async (req, res) => {
-    const { newPackageId } = req.body;
-    const userId = req.user.id;
-
-    try {
-      const currentSubscription = await Subscription.getUserSubscription(userId);
-      if (!currentSubscription) {
-        return res.status(404).json({ message: 'No active subscription found to downgrade.' });
-      }
-
-      if (currentSubscription.package_id === newPackageId) {
-        return res.status(400).json({ message: 'Cannot downgrade to the same package.' });
-      }
-
-      const newPackage = await Subscription.getPackageById(newPackageId);
-      if (!newPackage) {
-        return res.status(404).json({ message: 'New package not found.' });
-      }
-
-      // Optional: Add more sophisticated downgrade logic (e.g., check price or tier_level hierarchy)
-      // For V1, using "cancel old, create new". This means user is charged for the new (lower) tier
-      // and starts a new term. No refunds/proration for V1.
-
-      const paymentMethodIdFromBody = req.body.paymentMethodId;
-      if (!paymentMethodIdFromBody) {
-           return res.status(400).json({ message: 'Payment method ID is required for downgrade.' });
-      }
-      // const paymentMethodToUse = paymentMethodIdFromBody; // Simplified for V1
-
-      // Cancel the old subscription - Similar to upgrade, consider if this should be conditional.
-      await Subscription.cancelSubscription(currentSubscription.id);
-
-      // Create the new subscription (status will be pending_verification)
-      const newSubscriptionData = await Subscription.createUserSubscription({
-        userId,
-        packageId: newPackageId,
-        paymentMethodId: paymentMethodIdFromBody // This ID will be used for internal linking later
-      });
-
-      res.status(201).json({
-        message: 'Subscription downgrade initiated, pending verification. New term will start upon verification.',
-        subscription: newSubscriptionData
-      });
-
-    } catch (err) {
-      console.error('Error downgrading subscription:', err);
-      res.status(500).json({ message: 'Failed to downgrade subscription.', error: err.message });
-    }
+    // const { newPackageId } = req.body;
+    // const userId = req.user.id;
+    // ... (original implementation commented out) ...
+    return res.status(410).json({ message: 'This endpoint is deprecated. Please use the new transaction flow for new packages.' });
   }
+  */
 };
 
 module.exports = subscriptionController; 
