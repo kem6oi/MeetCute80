@@ -20,10 +20,14 @@ class ProfileView {
       }
       
       // Record the view - this will only insert once per day due to the unique constraint
+      // The unique constraint in DB is on (viewer_id, viewed_user_id, viewed_date)
+      // viewed_date defaults to CURRENT_DATE.
+      // The conflict target (viewed_user_id, viewer_id, CAST(viewed_at AS DATE)) effectively
+      // checks for uniqueness per day based on the viewed_at timestamp.
       const result = await pool.query(
-        `INSERT INTO profile_views (profile_user_id, viewer_id, viewed_at) 
+        `INSERT INTO profile_views (viewed_user_id, viewer_id, viewed_at)
          VALUES ($1, $2, CURRENT_TIMESTAMP)
-         ON CONFLICT (profile_user_id, viewer_id, CAST(viewed_at AS DATE)) 
+         ON CONFLICT (viewed_user_id, viewer_id, CAST(viewed_at AS DATE))
          DO UPDATE SET viewed_at = CURRENT_TIMESTAMP
          RETURNING *`,
         [profileUserId, viewerId]
@@ -45,7 +49,7 @@ class ProfileView {
           COUNT(*) FILTER (WHERE viewed_at >= NOW() - INTERVAL '7 days') AS week,
           COUNT(*) AS total
         FROM profile_views 
-        WHERE profile_user_id = $1`,
+        WHERE viewed_user_id = $1`,
         [profileUserId]
       );
       
