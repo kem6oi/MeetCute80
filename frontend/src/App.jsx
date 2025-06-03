@@ -2,8 +2,10 @@ import { BrowserRouter as Router, Routes, Route } from 'react-router-dom';
 import { AuthProvider } from './context/AuthContext';
 import { SubscriptionProvider } from './context/SubscriptionContext'; // Added
 import Layout from './components/Layout/Layout';
+import LandingPage from './pages/LandingPage'; // Import LandingPage
 import Login from './pages/Login';
 import Register from './pages/Register';
+import VerifyEmailPage from './pages/VerifyEmailPage'; // Added
 import ProfileSetup from './pages/ProfileSetup';
 import Dashboard from './pages/Dashboard';
 import Discover from './pages/Discover';
@@ -29,6 +31,7 @@ function App() {
           <Routes>
             <Route path="/login" element={<Login />} />
             <Route path="/register" element={<Register />} />
+            <Route path="/verify-email" element={<VerifyEmailPage />} /> {/* Added */}
             <Route path="/suspended" element={<Suspended />} />
             <Route path="/profile-setup" element={
               <PrivateRoute>
@@ -65,7 +68,7 @@ function App() {
           } />
           
           {/* Fallback routes */}
-          <Route path="/" element={<Login />} /> {/* Login might not need it, but wrapping broadly for now */}
+          <Route path="/" element={<LandingPage />} /> {/* Changed root path to LandingPage */}
           <Route path="*" element={<NotFound />} />
         </Routes>
         </SubscriptionProvider> {/* Closed SubscriptionProvider */}
