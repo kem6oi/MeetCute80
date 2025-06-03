@@ -19,6 +19,8 @@ const dashboardRoutes = require('./routes/dashboardRoutes'); // Added dashboard 
 const boostRoutes = require('./routes/boostRoutes');
 const anonymousBrowsingRoutes = require('./routes/anonymousBrowsingRoutes');
 const videoChatRoutes = require('./routes/videoChatRoutes');
+const paymentMethodAdminRoutes = require('./routes/paymentMethodAdminRoutes');
+const transactionRoutes = require('./routes/transactionRoutes');
 
 const app = express();
 
@@ -59,6 +61,8 @@ app.use('/api/dashboard', dashboardRoutes); // Added dashboard routes
 app.use('/api/boosts', boostRoutes);
 app.use('/api/browse/anonymous', anonymousBrowsingRoutes);
 app.use('/api/videochat', videoChatRoutes);
+app.use('/api/admin/payment-configurations', paymentMethodAdminRoutes);
+app.use('/api/transactions', transactionRoutes);
 
 // Add direct routes for backward compatibility with frontend
 app.get('/subscription/packages', (req, res) => {

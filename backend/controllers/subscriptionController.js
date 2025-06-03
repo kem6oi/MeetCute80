@@ -1,6 +1,5 @@
 const Subscription = require('../models/Subscription');
 const env = require('../config/env');
-const stripe = require('stripe')(env.STRIPE_SECRET_KEY);
 
 const subscriptionController = {
   getPackages: async (req, res) => {
@@ -84,36 +83,20 @@ const subscriptionController = {
         return res.status(404).json({ message: 'Package not found' });
       }
 
-      // Create Stripe payment intent
-      const paymentIntent = await stripe.paymentIntents.create({
-        amount: Math.round(pkg.price * 100), // Convert to cents
-        currency: 'usd',
-        payment_method: paymentMethodId,
-        confirm: true,
-        return_url: `${env.FRONTEND_URL}/subscription/confirmation`
+      // Create subscription (status will be pending_verification)
+      const newSubscription = await Subscription.createUserSubscription({
+        userId: req.user.id,
+        packageId,
+        paymentMethodId // This ID will be used for internal linking later
       });
 
-      if (paymentIntent.status === 'succeeded') {
-        // Create subscription
-        const subscription = await Subscription.createUserSubscription({
-          userId: req.user.id,
-          packageId,
-          paymentMethodId
-        });
-
-        res.json({
-          subscription,
-          message: 'Subscription created successfully'
-        });
-      } else {
-        res.status(400).json({
-          message: 'Payment failed',
-          status: paymentIntent.status
-        });
-      }
+      res.status(201).json({
+        message: 'Subscription initiated, pending verification.',
+        subscription: newSubscription
+      });
     } catch (err) {
       console.error('Error creating subscription:', err);
-      res.status(500).json({ 
+      res.status(500).json({
         message: 'Failed to create subscription',
         error: err.message
       });
@@ -169,36 +152,23 @@ const subscriptionController = {
           return res.status(400).json({ message: 'Payment method ID is required for upgrade.' });
       }
 
-      const paymentIntent = await stripe.paymentIntents.create({
-        amount: Math.round(newPackage.price * 100), // Price in cents
-        currency: 'usd',
-        payment_method: paymentMethodIdFromBody,
-        confirm: true,
-        // customer: currentSubscription.stripe_customer_id, // Removed for V1 simplicity, requires stripe_customer_id to be stored and retrieved
-        return_url: `${env.FRONTEND_URL}/subscription/confirmation` // Example URL
+      // Cancel the old subscription - This might need to be conditional based on new subscription success
+      // For now, proceed with cancellation then creation.
+      // Consider if cancellation should only happen *after* new one is 'active' (future step).
+      await Subscription.cancelSubscription(currentSubscription.id);
+
+      // Create the new subscription (status will be pending_verification)
+      const newSubscriptionData = await Subscription.createUserSubscription({
+        userId,
+        packageId: newPackageId,
+        paymentMethodId: paymentMethodIdFromBody // This ID will be used for internal linking later
       });
 
-      if (paymentIntent.status === 'succeeded') {
-        // Cancel the old subscription
-        await Subscription.cancelSubscription(currentSubscription.id);
+      res.status(201).json({
+        message: 'Subscription upgrade initiated, pending verification.',
+        subscription: newSubscriptionData
+      });
 
-        // Create the new subscription
-        const newSubscriptionData = await Subscription.createUserSubscription({
-          userId,
-          packageId: newPackageId,
-          paymentMethodId: paymentMethodIdFromBody // Or paymentIntent.payment_method if it's a new one
-        });
-
-        res.json({
-          subscription: newSubscriptionData,
-          message: 'Subscription upgraded successfully.'
-        });
-      } else {
-        res.status(400).json({
-          message: 'Payment for upgrade failed.',
-          status: paymentIntent.status
-        });
-      }
     } catch (err) {
       console.error('Error upgrading subscription:', err);
       res.status(500).json({ message: 'Failed to upgrade subscription.', error: err.message });
@@ -234,38 +204,21 @@ const subscriptionController = {
       }
       // const paymentMethodToUse = paymentMethodIdFromBody; // Simplified for V1
 
+      // Cancel the old subscription - Similar to upgrade, consider if this should be conditional.
+      await Subscription.cancelSubscription(currentSubscription.id);
 
-      // For "cancel old, create new", we still charge for the new package's term.
-      const paymentIntent = await stripe.paymentIntents.create({
-        amount: Math.round(newPackage.price * 100), // Price in cents
-        currency: 'usd',
-        payment_method: paymentMethodIdFromBody, // Using the one from body directly
-        confirm: true,
-        // customer: currentSubscription.stripe_customer_id, // Removed for V1 simplicity
-        return_url: `${env.FRONTEND_URL}/subscription/confirmation` // Example URL
+      // Create the new subscription (status will be pending_verification)
+      const newSubscriptionData = await Subscription.createUserSubscription({
+        userId,
+        packageId: newPackageId,
+        paymentMethodId: paymentMethodIdFromBody // This ID will be used for internal linking later
       });
 
-      if (paymentIntent.status === 'succeeded') {
-        // Cancel the old subscription
-        await Subscription.cancelSubscription(currentSubscription.id);
+      res.status(201).json({
+        message: 'Subscription downgrade initiated, pending verification. New term will start upon verification.',
+        subscription: newSubscriptionData
+      });
 
-        // Create the new subscription
-        const newSubscriptionData = await Subscription.createUserSubscription({
-          userId,
-          packageId: newPackageId,
-          paymentMethodId: paymentMethodIdFromBody // Using the one from body
-        });
-
-        res.json({
-          subscription: newSubscriptionData,
-          message: 'Subscription downgraded successfully. New term started.'
-        });
-      } else {
-        res.status(400).json({
-          message: 'Payment for downgrade failed.',
-          status: paymentIntent.status
-        });
-      }
     } catch (err) {
       console.error('Error downgrading subscription:', err);
       res.status(500).json({ message: 'Failed to downgrade subscription.', error: err.message });

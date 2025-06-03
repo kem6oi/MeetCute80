@@ -180,7 +180,7 @@ class Subscription {
         INSERT INTO user_subscriptions (
           user_id, package_id, status, end_date, payment_method_id, auto_renew
         )
-        VALUES ($1, $2, 'active', $3, $4, true)
+        VALUES ($1, $2, 'pending_verification', $3, $4, true)
         RETURNING *
       `, [userId, packageId, endDate, paymentMethodId]);
 
@@ -189,7 +189,7 @@ class Subscription {
         INSERT INTO subscription_transactions (
           subscription_id, amount, status, payment_method
         )
-        VALUES ($1, $2, 'completed', $3)
+        VALUES ($1, $2, 'pending_verification', $3)
       `, [
         subscriptionResult.rows[0].id,
         pkg.price,

@@ -1,5 +1,6 @@
 const pool = require('../config/db');
 const { insertAdminLog } = require('../utils/adminLogger');
+const PaymentMethod = require('../models/PaymentMethod');
 
 exports.getDashboardStats = async (req, res) => {
   const client = await pool.connect();
@@ -721,5 +722,193 @@ exports.getAdminLogs = async (req, res) => {
   } catch (err) {
     console.error('Error getting admin logs:', err);
     res.status(500).json({ message: 'Failed to get admin logs' });
+  }
+};
+
+// Payment Method Management
+exports.listGlobalPaymentMethodTypes = async (req, res) => {
+  try {
+    const types = await PaymentMethod.getAllTypes();
+    res.status(200).json(types);
+  } catch (error) {
+    console.error('Error in listGlobalPaymentMethodTypes:', error);
+    res.status(500).json({ message: 'Error listing global payment method types', error: error.message });
+  }
+};
+
+exports.createGlobalPaymentMethodType = async (req, res) => {
+  try {
+    const { name, code, description, isActive } = req.body; // isActive can be part of creation
+
+    if (!name || !code) {
+      return res.status(400).json({ message: 'Name and code are required for payment method type.' });
+    }
+
+    const newType = await PaymentMethod.createType({ name, code, description, isActive });
+    res.status(201).json(newType);
+  } catch (error) {
+    console.error('Error in createGlobalPaymentMethodType:', error);
+    // Check for unique constraint violation (e.g., PostgreSQL error code 23505)
+    if (error.code === '23505' && error.constraint === 'payment_methods_code_key') {
+      return res.status(409).json({ message: `Payment method type with code '${req.body.code.toUpperCase()}' already exists.` });
+    }
+    res.status(500).json({ message: 'Error creating global payment method type', error: error.message });
+  }
+};
+
+exports.listCountryPaymentMethods = async (req, res) => {
+  try {
+    const { countryId } = req.params;
+    if (isNaN(parseInt(countryId))) {
+        return res.status(400).json({ message: 'Invalid country ID.' });
+    }
+    const methods = await PaymentMethod.getCountryPaymentMethods(parseInt(countryId));
+    res.status(200).json(methods);
+  } catch (error) {
+    console.error('Error in listCountryPaymentMethods:', error);
+    res.status(500).json({ message: 'Error listing country payment methods', error: error.message });
+  }
+};
+
+exports.configureCountryPaymentMethod = async (req, res) => {
+  try {
+    const { countryId } = req.params;
+    const cId = parseInt(countryId);
+    const { paymentMethodId, isActive, priority, userInstructions, configurationDetails } = req.body;
+    const pId = parseInt(paymentMethodId);
+
+    if (isNaN(cId)) {
+      return res.status(400).json({ message: 'Invalid country ID.' });
+    }
+    if (isNaN(pId)) {
+      return res.status(400).json({ message: 'PaymentMethodId is required and must be a number.' });
+    }
+    if (configurationDetails !== null && typeof configurationDetails !== 'object') {
+        return res.status(400).json({ message: 'ConfigurationDetails must be an object or null.' });
+    }
+
+    // The model method returns the raw upserted row.
+    // We need to determine if it was a create or update for status code,
+    // or just fetch the full details again.
+    // For simplicity, we'll fetch details after upsert.
+
+    await PaymentMethod.configureCountryPaymentMethod({
+      countryId: cId,
+      paymentMethodId: pId,
+      isActive, // Will default in model if undefined
+      priority, // Will default in model if undefined
+      userInstructions,
+      configurationDetails
+    });
+
+    // Fetch the full details to return in response
+    const configuredMethodDetails = await PaymentMethod.getCountryPaymentMethodDetail(cId, pId);
+
+    if (!configuredMethodDetails) {
+        // This case should ideally not be reached if upsert was successful
+        return res.status(404).json({ message: 'Configured payment method not found after operation.' });
+    }
+
+    // Simple approach: return 200 for success from POST as it's an upsert.
+    // A more complex approach could try to determine if it was a create or update.
+    res.status(200).json(configuredMethodDetails);
+
+  } catch (error) {
+    console.error('Error in configureCountryPaymentMethod:', error);
+    // Handle potential foreign key constraint errors, e.g., if paymentMethodId doesn't exist
+    if (error.code === '23503') { // Foreign key violation
+        return res.status(400).json({ message: 'Invalid paymentMethodId or countryId. Ensure they exist.' });
+    }
+    res.status(500).json({ message: 'Error configuring country payment method', error: error.message });
+  }
+};
+
+exports.getCountryPaymentMethodDetail = async (req, res) => {
+  try {
+    const { countryId, paymentMethodId } = req.params;
+    const cId = parseInt(countryId);
+    const pId = parseInt(paymentMethodId);
+
+    if (isNaN(cId) || isNaN(pId)) {
+      return res.status(400).json({ message: 'Invalid country ID or payment method ID.' });
+    }
+
+    const detail = await PaymentMethod.getCountryPaymentMethodDetail(cId, pId);
+
+    if (!detail) {
+      return res.status(404).json({ message: 'Configured payment method not found for this country.' });
+    }
+    res.status(200).json(detail);
+  } catch (error) {
+    console.error('Error in getCountryPaymentMethodDetail:', error);
+    res.status(500).json({ message: 'Error getting country payment method detail', error: error.message });
+  }
+};
+
+exports.updateCountryPaymentMethodConfiguration = async (req, res) => {
+  try {
+    const { countryId, paymentMethodId } = req.params;
+    const cId = parseInt(countryId);
+    const pId = parseInt(paymentMethodId);
+    const { isActive, priority, userInstructions, configurationDetails } = req.body;
+
+    if (isNaN(cId) || isNaN(pId)) {
+      return res.status(400).json({ message: 'Invalid country ID or payment method ID.' });
+    }
+    if (configurationDetails !== undefined && configurationDetails !== null && typeof configurationDetails !== 'object') {
+        return res.status(400).json({ message: 'ConfigurationDetails must be an object or null if provided.' });
+    }
+
+    // Use the same upsert logic from the model
+    await PaymentMethod.configureCountryPaymentMethod({
+      countryId: cId,
+      paymentMethodId: pId,
+      isActive,
+      priority,
+      userInstructions,
+      configurationDetails
+    });
+
+    const updatedMethodDetails = await PaymentMethod.getCountryPaymentMethodDetail(cId, pId);
+
+    if (!updatedMethodDetails) {
+      // If after upsert, it's still not found, this is an issue (e.g. trying to update a non-existent one without creation)
+      // However, configureCountryPaymentMethod IS an upsert. So this means the method type ID itself might be invalid.
+      return res.status(404).json({ message: 'Configured payment method not found or payment method type is invalid.' });
+    }
+
+    res.status(200).json(updatedMethodDetails);
+
+  } catch (error) {
+    console.error('Error in updateCountryPaymentMethodConfiguration:', error);
+     if (error.code === '23503') { // Foreign key violation
+        return res.status(400).json({ message: 'Invalid paymentMethodId or countryId. Ensure they exist.' });
+    }
+    res.status(500).json({ message: 'Error updating country payment method configuration', error: error.message });
+  }
+};
+
+exports.removeCountryPaymentMethod = async (req, res) => {
+  try {
+    const { countryId, paymentMethodId } = req.params;
+    const cId = parseInt(countryId);
+    const pId = parseInt(paymentMethodId);
+
+    if (isNaN(cId) || isNaN(pId)) {
+      return res.status(400).json({ message: 'Invalid country ID or payment method ID.' });
+    }
+
+    const deletedMethod = await PaymentMethod.removeCountryPaymentMethod(cId, pId);
+
+    if (!deletedMethod) {
+      return res.status(404).json({ message: 'Configured payment method not found for this country to remove.' });
+    }
+
+    // Respond with the deleted record or a success message
+    res.status(200).json({ message: 'Payment method configuration removed successfully.', data: deletedMethod });
+    // Or simply res.status(204).send(); if no content is preferred on delete
+  } catch (error) {
+    console.error('Error in removeCountryPaymentMethod:', error);
+    res.status(500).json({ message: 'Error removing country payment method', error: error.message });
   }
 };
