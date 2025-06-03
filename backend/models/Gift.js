@@ -1,54 +1,124 @@
 const pool = require('../config/db');
 
 class Gift {
+  // Tier hierarchy for gift sending permissions
+  static TIER_HIERARCHY = {
+    'Basic': 1,
+    'Premium': 2,
+    'Elite': 3,
+  };
+
   // Gift Items Methods
   static async getAllGiftItems() {
     const result = await pool.query(
-      'SELECT * FROM gift_items WHERE is_available = TRUE ORDER BY price ASC'
+      'SELECT id, name, description, price, image_url, category, is_available, required_tier_level FROM gift_items WHERE is_available = TRUE ORDER BY price ASC'
     );
     return result.rows;
   }
 
   static async getGiftItemById(id) {
     const result = await pool.query(
-      'SELECT * FROM gift_items WHERE id = $1',
+      'SELECT id, name, description, price, image_url, category, is_available, required_tier_level FROM gift_items WHERE id = $1',
       [id]
     );
     return result.rows[0];
   }
 
-  static async createGiftItem({ name, description, price, imageUrl, category }) {
+  static async createGiftItem({ name, description, price, imageUrl, category, required_tier_level }) {
     const result = await pool.query(
-      `INSERT INTO gift_items (name, description, price, image_url, category)
-       VALUES ($1, $2, $3, $4, $5)
+      `INSERT INTO gift_items (name, description, price, image_url, category, required_tier_level)
+       VALUES ($1, $2, $3, $4, $5, $6)
        RETURNING *`,
-      [name, description, price, imageUrl, category]
+      [name, description, price, imageUrl, category, required_tier_level]
     );
     return result.rows[0];
   }
 
-  static async updateGiftItem(id, { name, description, price, imageUrl, category, isAvailable }) {
+  static async updateGiftItem(id, { name, description, price, imageUrl, category, isAvailable, required_tier_level }) {
     const result = await pool.query(
       `UPDATE gift_items 
-       SET name = $1, description = $2, price = $3, image_url = $4, 
-           category = $5, is_available = $6
-       WHERE id = $7
+       SET name = COALESCE($1, name),
+           description = COALESCE($2, description),
+           price = COALESCE($3, price),
+           image_url = COALESCE($4, image_url),
+           category = COALESCE($5, category),
+           is_available = COALESCE($6, is_available),
+           required_tier_level = COALESCE($7, required_tier_level)
+       WHERE id = $8
        RETURNING *`,
-      [name, description, price, imageUrl, category, isAvailable, id]
+      [name, description, price, imageUrl, category, isAvailable, required_tier_level, id]
     );
     return result.rows[0];
   }
 
   // User Gifts Methods
   static async sendGift({ senderId, recipientId, giftItemId, message, isAnonymous }) {
-    const result = await pool.query(
-      `INSERT INTO user_gifts 
-       (sender_id, recipient_id, gift_item_id, message, is_anonymous)
-       VALUES ($1, $2, $3, $4, $5)
-       RETURNING *`,
-      [senderId, recipientId, giftItemId, message, isAnonymous]
-    );
-    return result.rows[0];
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+
+      // 1. Fetch sender's tier
+      const senderTierResult = await client.query(
+        `SELECT sp.tier_level
+         FROM user_subscriptions us
+         JOIN subscription_packages sp ON us.package_id = sp.id
+         WHERE us.user_id = $1 AND us.status = 'active'
+         ORDER BY sp.price DESC
+         LIMIT 1`,
+        [senderId]
+      );
+
+      const senderTier = senderTierResult.rows[0]?.tier_level || 'Basic'; // Default to Basic if no active sub
+
+      // 2. Fetch gift item details (price and required_tier_level)
+      const giftItemResult = await client.query(
+        'SELECT price, required_tier_level FROM gift_items WHERE id = $1 AND is_available = TRUE',
+        [giftItemId]
+      );
+
+      if (giftItemResult.rows.length === 0) {
+        throw new Error('Gift item not found or is unavailable.');
+      }
+      const giftItem = giftItemResult.rows[0];
+
+      // 3. Tier Check
+      const senderTierValue = this.TIER_HIERARCHY[senderTier] || 0;
+      const requiredTierValue = this.TIER_HIERARCHY[giftItem.required_tier_level] || 0;
+
+      if (giftItem.required_tier_level && senderTierValue < requiredTierValue) {
+        // Using a specific error code/name could be useful for frontend handling
+        const error = new Error(`Your subscription tier (${senderTier}) is not sufficient to send this gift (requires ${giftItem.required_tier_level}).`);
+        error.code = 'INSUFFICIENT_TIER';
+        throw error;
+      }
+
+      // 4. Insert into user_gifts
+      const userGiftResult = await client.query(
+        `INSERT INTO user_gifts
+         (sender_id, recipient_id, gift_item_id, message, is_anonymous)
+         VALUES ($1, $2, $3, $4, $5)
+         RETURNING *`,
+        [senderId, recipientId, giftItemId, message, isAnonymous]
+      );
+      const createdUserGift = userGiftResult.rows[0];
+
+      // 5. Insert into transactions
+      await client.query(
+        `INSERT INTO transactions (user_id, type, amount, status)
+         VALUES ($1, 'gift', $2, 'completed')`,
+        [senderId, giftItem.price]
+      );
+
+      await client.query('COMMIT');
+      return createdUserGift;
+
+    } catch (error) {
+      await client.query('ROLLBACK');
+      console.error('Error in sendGift transaction:', error);
+      throw error; // Re-throw to be caught by controller
+    } finally {
+      client.release();
+    }
   }
 
   static async getReceivedGifts(userId) {

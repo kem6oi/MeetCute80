@@ -26,10 +26,13 @@ exports.getGiftItemById = async (req, res) => {
 
 exports.createGiftItem = async (req, res) => {
   try {
-    const { name, description, price, imageUrl, category } = req.body;
+    const { name, description, price, imageUrl, category, required_tier_level } = req.body;
     
     if (!name || !price) {
       return res.status(400).json({ error: 'Name and price are required' });
+    }
+    if (required_tier_level && !['Basic', 'Premium', 'Elite'].includes(required_tier_level)) {
+      return res.status(400).json({ error: 'Invalid required_tier_level. Must be Basic, Premium, or Elite.' });
     }
 
     const gift = await Gift.createGiftItem({
@@ -37,28 +40,37 @@ exports.createGiftItem = async (req, res) => {
       description,
       price: parseFloat(price),
       imageUrl,
-      category
+      category,
+      required_tier_level
     });
 
     res.status(201).json(gift);
   } catch (err) {
-    console.error(err);
+    console.error('Error creating gift item:', err);
     res.status(500).json({ error: 'Failed to create gift item' });
   }
 };
 
 exports.updateGiftItem = async (req, res) => {
   try {
-    const { name, description, price, imageUrl, category, isAvailable } = req.body;
+    const { name, description, price, imageUrl, category, isAvailable, required_tier_level } = req.body;
     
-    const gift = await Gift.updateGiftItem(req.params.id, {
+    if (required_tier_level && !['Basic', 'Premium', 'Elite', null].includes(required_tier_level)) {
+        return res.status(400).json({ error: 'Invalid required_tier_level. Must be Basic, Premium, Elite, or null.' });
+    }
+
+    const giftData = {
       name,
       description,
-      price: parseFloat(price),
       imageUrl,
       category,
       isAvailable
-    });
+    };
+    if (price !== undefined) giftData.price = parseFloat(price);
+    if (required_tier_level !== undefined) giftData.required_tier_level = required_tier_level;
+
+
+    const gift = await Gift.updateGiftItem(req.params.id, giftData);
 
     if (!gift) {
       return res.status(404).json({ error: 'Gift item not found' });
@@ -90,7 +102,13 @@ exports.sendGift = async (req, res) => {
 
     res.status(201).json(gift);
   } catch (err) {
-    console.error(err);
+    console.error('Error sending gift:', err);
+    if (err.code === 'INSUFFICIENT_TIER') {
+      return res.status(403).json({ error: err.message || 'Your subscription tier does not allow sending this gift.' });
+    }
+    if (err.message && err.message.toLowerCase().includes('gift item not found')) {
+        return res.status(404).json({ error: err.message });
+    }
     res.status(500).json({ error: 'Failed to send gift' });
   }
 };

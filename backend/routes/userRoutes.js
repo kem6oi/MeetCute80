@@ -2,12 +2,15 @@ const express = require('express');
 const router = express.Router();
 const multer = require('multer');
 const path = require('path');
-const fs = require('fs');
+const fs = require('fs'); // Corrected: require('fs')
 const { isAuthenticated } = require('../middleware/auth');
-const { checkSubscription, checkPremiumFeature } = require('../middleware/subscription');
+// checkPremiumFeature is removed, checkFeatureAccess is new
+const { checkSubscription, checkFeatureAccess } = require('../middleware/subscription');
+const { profileViewAnalyticsRateLimiter } = require('../middleware/rateLimiter'); // Added
 const userController = require('../controllers/userController');
 const Profile = require('../models/Profile');
 const ProfileView = require('../models/ProfileView');
+const AnonymousBrowsingSession = require('../models/AnonymousBrowsingSession'); // Added
 const pool = require('../config/db');
 
 // Set up multer storage for profile pictures
@@ -82,9 +85,19 @@ router.get('/profile/:id', isAuthenticated, checkSubscription, async (req, res) 
       return res.status(404).json({ error: 'Profile not found' });
     }
     
-    // Record the profile view (only if viewing someone else's profile)
+    // Record the profile view (only if viewing someone else's profile and viewer is not anonymous)
     if (profileUserId !== viewerId) {
-      await ProfileView.recordView(profileUserId, viewerId);
+      let recordView = true; // Default to recording the view
+      // Check if the viewer has an active anonymous browsing session
+      const isActiveAnonymous = await AnonymousBrowsingSession.isActive(viewerId);
+      if (isActiveAnonymous) {
+        recordView = false; // Do not record if anonymous
+      }
+
+      // Conditionally record the profile view
+      if (recordView) {
+        await ProfileView.recordView(profileUserId, viewerId);
+      }
     }
     
     res.json(profile);
@@ -132,21 +145,49 @@ router.put('/profile', isAuthenticated, async (req, res) => {
   }
 });
 
-// Premium features
-router.get('/profile-views', isAuthenticated, checkPremiumFeature('See who viewed your profile'), async (req, res) => {
-  // TODO: Implement profile views
-  res.json([]);
-});
+// --- User Feature Routes ---
 
-router.post('/profile-boost', isAuthenticated, checkPremiumFeature('Profile boost'), async (req, res) => {
-  // TODO: Implement profile boost
-  res.json({ message: 'Profile boosted successfully' });
-});
+// Who Likes You feature - GET /api/user/likes/received
+router.get(
+  '/likes/received',
+  isAuthenticated,
+  checkSubscription, // Ensures req.subscription is populated for checkFeatureAccess
+  checkFeatureAccess('whoLikesYou'), // 'whoLikesYou' is the assumed feature_key
+  userController.getWhoLikedMe
+);
 
-router.get('/advanced-matches', isAuthenticated, checkPremiumFeature('Advanced matching algorithms'), async (req, res) => {
-  // TODO: Implement advanced matching
-  res.json([]);
-});
+// Profile Views feature - GET /api/user/profile-views
+router.get(
+  '/profile-views',
+  isAuthenticated,
+  checkSubscription, // Ensures req.subscription is populated
+  checkFeatureAccess('profileViews'), // 'profileViews' is the assumed feature_key
+  profileViewAnalyticsRateLimiter, // Apply rate limiting
+  async (req, res) => {
+    // TODO: Implement actual logic for fetching profile views
+    // This might involve a new controller method in userController.js
+    // For now, returning placeholder if the old one was just a placeholder.
+    // Example: const views = await ProfileView.getViewsForUser(req.user.id);
+    // res.json(views);
+    res.status(501).json({ message: 'Profile views feature not fully implemented yet.' });
+  }
+);
+
+// Advanced Matches feature - GET /api/user/advanced-matches
+router.get(
+  '/advanced-matches',
+  isAuthenticated,
+  checkSubscription, // Ensures req.subscription is populated
+  checkFeatureAccess('advancedMatching'), // 'advancedMatching' is the assumed feature_key
+  async (req, res) => {
+    // TODO: Implement actual logic for fetching advanced matches
+    // This might involve a new controller method
+    // For now, returning placeholder.
+    res.status(501).json({ message: 'Advanced matching feature not fully implemented yet.' });
+  }
+);
+
+// Note: POST /profile-boost route was removed as it's now handled by boostRoutes.js
 
 // Route for uploading profile picture
 router.post('/profile/picture', isAuthenticated, upload.single('profilePicture'), async (req, res) => {

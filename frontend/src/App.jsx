@@ -1,5 +1,6 @@
 import { BrowserRouter as Router, Routes, Route } from 'react-router-dom';
 import { AuthProvider } from './context/AuthContext';
+import { SubscriptionProvider } from './context/SubscriptionContext'; // Added
 import Layout from './components/Layout/Layout';
 import Login from './pages/Login';
 import Register from './pages/Register';
@@ -17,25 +18,36 @@ import Settings from './pages/Settings';
 import Suspended from './pages/Suspended';
 import Pricing from './pages/Pricing';
 import SubscriptionConfirmation from './pages/SubscriptionConfirmation';
+import ConfirmSubscriptionPage from './pages/ConfirmSubscriptionPage'; // Added
 import PrivateRoute from './components/PrivateRoute';
 
 function App() {
   return (
     <Router>
       <AuthProvider>
-        <Routes>
-          <Route path="/login" element={<Login />} />
-          <Route path="/register" element={<Register />} />
-          <Route path="/suspended" element={<Suspended />} />
-          <Route path="/profile-setup" element={<ProfileSetup />} />
-          <Route path="/subscription/confirmation" element={
-            <PrivateRoute>
-              <SubscriptionConfirmation />
-            </PrivateRoute>
-          } />
-          <Route element={<Layout />}>
-            <Route path="/dashboard" element={<Dashboard />} />
-            <Route path="/discover" element={<Discover />} />
+        <SubscriptionProvider> {/* Wrapped with SubscriptionProvider */}
+          <Routes>
+            <Route path="/login" element={<Login />} />
+            <Route path="/register" element={<Register />} />
+            <Route path="/suspended" element={<Suspended />} />
+            <Route path="/profile-setup" element={
+              <PrivateRoute>
+                <ProfileSetup />
+              </PrivateRoute>
+            } />
+            <Route path="/subscription/confirmation" element={
+              <PrivateRoute>
+                <SubscriptionConfirmation />
+              </PrivateRoute>
+            } />
+            <Route path="/subscribe/:packageId" element={ // Added route
+              <PrivateRoute>
+                <ConfirmSubscriptionPage />
+              </PrivateRoute>
+            } />
+            <Route element={<Layout />}> {/* Layout and its children will have context */}
+              <Route path="/dashboard" element={<Dashboard />} />
+              <Route path="/discover" element={<Discover />} />
             <Route path="/messages" element={<Messages />} />
             <Route path="/messages/:userId" element={<Messages />} />
             <Route path="/matches" element={<Matches />} />
@@ -53,9 +65,10 @@ function App() {
           } />
           
           {/* Fallback routes */}
-          <Route path="/" element={<Login />} />
+          <Route path="/" element={<Login />} /> {/* Login might not need it, but wrapping broadly for now */}
           <Route path="*" element={<NotFound />} />
         </Routes>
+        </SubscriptionProvider> {/* Closed SubscriptionProvider */}
       </AuthProvider>
     </Router>
   );
