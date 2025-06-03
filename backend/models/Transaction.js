@@ -134,6 +134,213 @@ class Transaction {
         );
         return result.rows[0] || null;
     }
+
+    /**
+     * Fetches transactions with status = 'pending_verification'.
+     * Joins with users, payment_methods, and countries for detailed info.
+     * @param {number} [limit=20] - Number of records to fetch.
+     * @param {number} [offset=0] - Number of records to skip for pagination.
+     * @returns {Promise<{transactions: Array<Object>, totalCount: number}>} List of transactions and total count.
+     */
+    static async getPendingVerification(limit = 20, offset = 0) {
+        const query = `
+            SELECT
+                t.id, t.user_id, t.amount, t.currency, t.status,
+                t.item_category, t.payable_item_id, t.user_provided_reference,
+                t.created_at, t.updated_at,
+                u.email AS user_email,
+                pm.name AS payment_method_name,
+                pm.code AS payment_method_code,
+                co.name AS payment_country_name
+            FROM transactions t
+            JOIN users u ON t.user_id = u.id
+            JOIN payment_methods pm ON t.payment_method_type_id = pm.id
+            JOIN countries co ON t.payment_country_id = co.id
+            WHERE t.status = 'pending_verification'
+            ORDER BY t.created_at ASC
+            LIMIT $1 OFFSET $2;
+        `;
+
+        const countQuery = `
+            SELECT COUNT(*) FROM transactions WHERE status = 'pending_verification';
+        `;
+
+        const [transactionsResult, countResult] = await Promise.all([
+            pool.query(query, [limit, offset]),
+            pool.query(countQuery)
+        ]);
+
+        return {
+            transactions: transactionsResult.rows,
+            totalCount: parseInt(countResult.rows[0].count, 10)
+        };
+    }
+
+    /**
+     * Verifies a transaction and triggers fulfillment if applicable.
+     * @param {Object} details - Verification details.
+     * @param {number} details.transactionId - The ID of the transaction to verify.
+     * @param {number} details.adminId - The ID of the admin performing the verification (for audit).
+     * @param {string} details.newStatus - The new status, must be 'completed' or 'declined'.
+     * @param {string} [details.adminNotes] - Optional notes from the admin.
+     * @returns {Promise<Object>} The updated transaction record.
+     * @throws {Error} If transaction not found, invalid newStatus, or fulfillment fails.
+     */
+    static async verify({ transactionId, adminId, newStatus, adminNotes }) {
+        if (newStatus !== 'completed' && newStatus !== 'declined') {
+            throw new Error("Invalid new status. Must be 'completed' or 'declined'.");
+        }
+
+        const client = await pool.connect();
+        try {
+            await client.query('BEGIN');
+
+            // 1. Fetch the transaction to verify its current state and details
+            const currentTransactionResult = await client.query(
+                'SELECT * FROM transactions WHERE id = $1 FOR UPDATE', // Lock the row
+                [transactionId]
+            );
+            const currentTransaction = currentTransactionResult.rows[0];
+
+            if (!currentTransaction) {
+                throw new Error('Transaction not found.');
+            }
+            if (currentTransaction.status !== 'pending_verification') {
+                // Or, allow verification even if it's e.g. pending_payment, depending on admin workflow
+                throw new Error(`Transaction is not in 'pending_verification' status (current: ${currentTransaction.status}). Cannot verify.`);
+            }
+
+            // 2. Update the main transaction record
+            const updateTransactionQuery = `
+                UPDATE transactions
+                SET status = $1, admin_notes = $2, updated_at = CURRENT_TIMESTAMP
+                WHERE id = $3
+                RETURNING *;
+            `;
+            const updatedTransactionResult = await client.query(updateTransactionQuery, [
+                newStatus,
+                adminNotes,
+                transactionId
+            ]);
+            const updatedTransactionDetails = updatedTransactionResult.rows[0];
+
+            // 3. Fulfillment logic (if status is 'completed')
+            if (newStatus === 'completed') {
+                if (updatedTransactionDetails.item_category === 'subscription') {
+                    // Find and activate the corresponding user_subscription
+                    // This assumes Subscription.createUserSubscription created a 'pending_verification' user_subscription
+                    const userSubUpdateResult = await client.query(
+                        `UPDATE user_subscriptions
+                         SET status = 'active',
+                             start_date = CURRENT_TIMESTAMP,
+                             -- Store our transaction.id as a reference. Ensure column type is compatible (VARCHAR).
+                             payment_method_id = $3
+                         WHERE user_id = $1 AND package_id = $2 AND status = 'pending_verification'
+                         ORDER BY created_at DESC -- In case multiple exist, activate the most recent pending one
+                         LIMIT 1
+                         RETURNING id, status;`,
+                        [updatedTransactionDetails.user_id, updatedTransactionDetails.payable_item_id, updatedTransactionDetails.id.toString()]
+                    );
+
+                    if (userSubUpdateResult.rows.length > 0) {
+                        const activatedSubscriptionId = userSubUpdateResult.rows[0].id;
+
+                        // Fetch the payment method name using payment_method_type_id from the main transaction
+                        const pmType = await PaymentMethod.getTypeById(updatedTransactionDetails.payment_method_type_id);
+                        const paymentMethodName = pmType ? pmType.name : 'Unknown';
+
+
+                        // Update the corresponding subscription_transactions record
+                        await client.query(
+                            `UPDATE subscription_transactions
+                             SET status = 'completed',
+                                 payment_method = $2, -- Store the actual payment method name/code used
+                                 updated_at = CURRENT_TIMESTAMP
+                             WHERE subscription_id = $1 AND status = 'pending_verification'
+                             ORDER BY created_at DESC
+                             LIMIT 1;`,
+                            [activatedSubscriptionId, paymentMethodName]
+                        );
+                         console.log(`Subscription ${activatedSubscriptionId} activated and transaction ${transactionId} completed.`);
+                    } else {
+                        // This is a critical issue: transaction completed but couldn't activate the service.
+                        console.warn(`CRITICAL: Transaction ${transactionId} completed for user ${updatedTransactionDetails.user_id}, package ${updatedTransactionDetails.payable_item_id}, but no 'pending_verification' user_subscription was found to activate.`);
+                        // Depending on business rules, you might:
+                        // 1. Throw an error here to ROLLBACK the entire operation.
+                        // 2. Let it commit and flag for manual review.
+                        // For now, it logs a warning and the transaction status update will commit.
+                        // throw new Error('Fulfillment failed: Could not find pending subscription to activate.');
+                    }
+                } else if (updatedTransactionDetails.item_category === 'gift') {
+                    // TODO: Implement gift fulfillment logic
+                    console.log(`TODO: Fulfill gift for transaction ${transactionId}`);
+                } else if (updatedTransactionDetails.item_category === 'boost') {
+                    // TODO: Implement boost fulfillment logic
+                    console.log(`TODO: Fulfill boost for transaction ${transactionId}`);
+                }
+            }
+            // TODO: Log admin action (adminId, transactionId, oldStatus, newStatus, notes)
+
+            await client.query('COMMIT');
+            return updatedTransactionDetails;
+
+        } catch (error) {
+            await client.query('ROLLBACK');
+            console.error(`Error verifying transaction ${transactionId}:`, error);
+            throw error; // Re-throw to be caught by controller
+        } finally {
+            client.release();
+        }
+    }
+
+    /**
+     * Fetches all transactions for a given userId with pagination.
+     * Joins with payment_methods and countries.
+     * @param {Object} params - Parameters for listing transactions.
+     * @param {number} params.userId - The ID of the user.
+     * @param {number} [params.limit=10] - Number of records to fetch.
+     * @param {number} [params.offset=0] - Number of records to skip.
+     * @returns {Promise<{transactions: Array<Object>, totalCount: number}>} List of transactions and total count.
+     */
+    static async listByUserId({ userId, limit = 10, offset = 0 }) {
+        const query = `
+            SELECT
+                t.id,
+                t.user_id,
+                t.amount,
+                t.currency,
+                t.status,
+                t.item_category,
+                t.payable_item_id,
+                t.user_provided_reference,
+                t.admin_notes,
+                t.created_at,
+                t.updated_at,
+                pm.name AS payment_method_name,
+                pm.code AS payment_method_code,
+                co.name AS payment_country_name
+            FROM transactions t
+            LEFT JOIN payment_methods pm ON t.payment_method_type_id = pm.id
+            LEFT JOIN countries co ON t.payment_country_id = co.id
+            WHERE t.user_id = $1
+            ORDER BY t.created_at DESC
+            LIMIT $2 OFFSET $3;
+        `;
+
+        const countQuery = `
+            SELECT COUNT(*) FROM transactions WHERE user_id = $1;
+        `;
+
+        const [transactionsResult, countResult] = await Promise.all([
+            pool.query(query, [userId, limit, offset]),
+            pool.query(countQuery, [userId])
+        ]);
+
+        return {
+            transactions: transactionsResult.rows,
+            totalCount: parseInt(countResult.rows[0].count, 10)
+        };
+    }
 }
 
 module.exports = Transaction;

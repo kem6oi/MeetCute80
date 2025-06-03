@@ -21,6 +21,7 @@ const anonymousBrowsingRoutes = require('./routes/anonymousBrowsingRoutes');
 const videoChatRoutes = require('./routes/videoChatRoutes');
 const paymentMethodAdminRoutes = require('./routes/paymentMethodAdminRoutes');
 const transactionRoutes = require('./routes/transactionRoutes');
+const adminTransactionRoutes = require('./routes/adminTransactionRoutes');
 
 const app = express();
 
@@ -63,6 +64,7 @@ app.use('/api/browse/anonymous', anonymousBrowsingRoutes);
 app.use('/api/videochat', videoChatRoutes);
 app.use('/api/admin/payment-configurations', paymentMethodAdminRoutes);
 app.use('/api/transactions', transactionRoutes);
+app.use('/api/admin/transactions', adminTransactionRoutes);
 
 // Add direct routes for backward compatibility with frontend
 app.get('/subscription/packages', (req, res) => {

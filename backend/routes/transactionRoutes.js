@@ -15,4 +15,10 @@ router.post('/:transactionId/submit-reference', transactionController.submitPaym
 // Route to get the status/details of a specific transaction
 router.get('/:transactionId', transactionController.getTransactionStatus);
 
+// Route to list available payment methods for a country
+router.get('/country/:countryId/methods', transactionController.listAvailableCountryPaymentMethods);
+
+// Route for user to list their own transactions
+router.get('/my-transactions', transactionController.listUserTransactions);
+
 module.exports = router;

@@ -1,6 +1,7 @@
 const pool = require('../config/db');
 const { insertAdminLog } = require('../utils/adminLogger');
 const PaymentMethod = require('../models/PaymentMethod');
+const Transaction = require('../models/Transaction'); // Added Transaction model import
 
 exports.getDashboardStats = async (req, res) => {
   const client = await pool.connect();
@@ -910,5 +911,86 @@ exports.removeCountryPaymentMethod = async (req, res) => {
   } catch (error) {
     console.error('Error in removeCountryPaymentMethod:', error);
     res.status(500).json({ message: 'Error removing country payment method', error: error.message });
+  }
+};
+
+// Admin Transaction Management
+exports.listPendingVerificationTransactions = async (req, res) => {
+  try {
+    const limit = parseInt(req.query.limit) || 20;
+    const offset = parseInt(req.query.offset) || 0;
+
+    if (isNaN(limit) || isNaN(offset) || limit <= 0 || offset < 0) {
+      return res.status(400).json({ message: 'Invalid limit or offset parameters.' });
+    }
+
+    const result = await Transaction.getPendingVerification(limit, offset);
+    res.status(200).json(result);
+  } catch (error) {
+    console.error('Error listing pending verification transactions:', error);
+    res.status(500).json({ message: 'Failed to list pending verification transactions', error: error.message });
+  }
+};
+
+exports.getAdminTransactionDetails = async (req, res) => {
+  try {
+    const { transactionId } = req.params;
+    const tId = parseInt(transactionId);
+
+    if (isNaN(tId)) {
+      return res.status(400).json({ message: 'Invalid transaction ID.' });
+    }
+
+    const transaction = await Transaction.getById(tId); // Use admin version getById
+
+    if (!transaction) {
+      return res.status(404).json({ message: 'Transaction not found.' });
+    }
+    res.status(200).json(transaction);
+  } catch (error) {
+    console.error('Error getting transaction details for admin:', error);
+    res.status(500).json({ message: 'Failed to get transaction details', error: error.message });
+  }
+};
+
+exports.verifyTransactionStatus = async (req, res) => {
+  try {
+    const { transactionId } = req.params;
+    const adminId = req.user.id; // Assuming admin user ID is available from auth middleware
+    const { newStatus, adminNotes } = req.body;
+
+    const tId = parseInt(transactionId);
+
+    if (isNaN(tId)) {
+      return res.status(400).json({ message: 'Invalid transaction ID.' });
+    }
+    if (newStatus !== 'completed' && newStatus !== 'declined') {
+      return res.status(400).json({ message: "Invalid new status. Must be 'completed' or 'declined'." });
+    }
+
+    const updatedTransaction = await Transaction.verify({
+      transactionId: tId,
+      adminId,
+      newStatus,
+      adminNotes
+    });
+
+    // TODO: Log admin action using insertAdminLog
+    // await insertAdminLog({ adminId, action: 'VERIFY_TRANSACTION', targetTransactionId: tId, details: `Status set to ${newStatus}` });
+
+
+    res.status(200).json(updatedTransaction);
+  } catch (error) {
+    console.error('Error verifying transaction status:', error);
+    if (error.message.includes('Transaction not found') ||
+        error.message.includes('not in \'pending_verification\' status') ||
+        error.message.includes('Invalid new status')) {
+      return res.status(400).json({ message: error.message });
+    }
+    // Specific error for fulfillment failure if Transaction.verify throws it distinctly
+    if (error.message.includes('Fulfillment failed')) {
+        return res.status(500).json({ message: 'Transaction status updated, but an error occurred during service fulfillment. Please review manually.', error: error.message });
+    }
+    res.status(500).json({ message: 'Failed to verify transaction status', error: error.message });
   }
 };

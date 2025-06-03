@@ -139,3 +139,93 @@ exports.getTransactionStatus = async (req, res) => {
         res.status(500).json({ message: 'Failed to get transaction status', error: error.message });
     }
 };
+
+/**
+ * Lists active payment methods available for a specific country.
+ */
+exports.listAvailableCountryPaymentMethods = async (req, res) => {
+    try {
+        const { countryId } = req.params;
+        const cId = parseInt(countryId);
+
+        if (isNaN(cId)) {
+            return res.status(400).json({ message: 'Invalid country ID.' });
+        }
+
+        const allCountryMethods = await PaymentMethod.getCountryPaymentMethods(cId);
+
+        const activeMethods = allCountryMethods
+            .filter(method => method.is_active)
+            .map(method => {
+                // TODO: Selectively expose parts of configuration_details based on payment_method_code
+                // For now, returning all of it, assuming frontend will pick relevant fields.
+                // Example: if (method.payment_method_code === 'MPESA') { config = { paybill: method.configuration_details.paybill } }
+                return {
+                    payment_method_id: method.payment_method_id,
+                    name: method.payment_method_name,
+                    code: method.payment_method_code,
+                    user_instructions: method.user_instructions,
+                    configuration_details: method.configuration_details // Be cautious with this in production
+                };
+            });
+
+        res.status(200).json(activeMethods);
+
+    } catch (error) {
+        console.error('Error listing available country payment methods:', error);
+        res.status(500).json({ message: 'Failed to list available payment methods', error: error.message });
+    }
+};
+
+/**
+ * Lists transactions for the authenticated user.
+ */
+exports.listUserTransactions = async (req, res) => {
+    try {
+        const userId = req.user.id;
+        const limit = parseInt(req.query.limit) || 10;
+        const offset = parseInt(req.query.offset) || 0;
+
+        if (isNaN(limit) || isNaN(offset) || limit <= 0 || offset < 0) {
+            return res.status(400).json({ message: 'Invalid limit or offset parameters.' });
+        }
+
+        const { transactions, totalCount } = await Transaction.listByUserId({
+            userId,
+            limit,
+            offset
+        });
+
+        // Enhance transaction data with item names
+        const enhancedTransactions = await Promise.all(
+            transactions.map(async (trans) => {
+                let itemName = 'N/A';
+                if (trans.item_category === 'subscription' && trans.payable_item_id) {
+                    try {
+                        const pkg = await Subscription.getPackageById(trans.payable_item_id);
+                        if (pkg) {
+                            itemName = pkg.name;
+                        } else {
+                            itemName = `Package ID ${trans.payable_item_id} (Not Found)`;
+                        }
+                    } catch (pkgError) {
+                        console.error(`Error fetching package details for transaction ${trans.id}:`, pkgError);
+                        itemName = `Package ID ${trans.payable_item_id} (Error)`;
+                    }
+                } else if (trans.item_category === 'gift' && trans.payable_item_id) {
+                    // TODO: Fetch gift name if a Gift model and getById method exist
+                    // For example: const gift = await Gift.getById(trans.payable_item_id); itemName = gift.name;
+                    itemName = `Gift ID ${trans.payable_item_id}`;
+                }
+                // Add more categories as needed
+                return { ...trans, itemName };
+            })
+        );
+
+        res.status(200).json({ transactions: enhancedTransactions, totalCount });
+
+    } catch (error) {
+        console.error('Error listing user transactions:', error);
+        res.status(500).json({ message: 'Failed to list user transactions', error: error.message });
+    }
+};

@@ -5,8 +5,11 @@ import RevenueReport from '../components/Admin/RevenueReport';
 import ModerationPanel from '../components/Admin/ModerationPanel';
 import SubscriptionManagement from '../components/Admin/SubscriptionManagement';
 import AdminStats from '../components/Admin/AdminStats';
+import GlobalPaymentMethodsManager from '../components/Admin/GlobalPaymentMethodsManager';
+import CountryPaymentMethodsManager from '../components/Admin/CountryPaymentMethodsManager';
+import AdminTransactionVerification from '../components/Admin/AdminTransactionVerification'; // Import new component
 import api from '../utils/api';
-import { FaUsers, FaChartLine, FaShieldAlt, FaTags } from 'react-icons/fa';
+import { FaUsers, FaChartLine, FaShieldAlt, FaTags, FaMoneyCheckAlt, FaTasks } from 'react-icons/fa'; // Added FaTasks
 
 const AdminDashboard = () => {
   const { currentUser } = useAuth();
@@ -158,6 +161,32 @@ const AdminDashboard = () => {
             Moderation Tools
           </span>
         </button>
+        <button
+          className={`py-3 px-6 font-medium text-sm border-b-2 transition-colors ${
+            activeTab === 'paymentMethods'
+              ? 'border-[var(--primary)] text-[var(--primary)]'
+              : 'border-transparent text-[var(--text-light)] hover:text-[var(--primary)]'
+          }`}
+          onClick={() => setActiveTab('paymentMethods')}
+        >
+          <span className="flex items-center">
+            <FaMoneyCheckAlt className="w-4 h-4 mr-2" />
+            Payment Methods
+          </span>
+        </button>
+        <button
+          className={`py-3 px-6 font-medium text-sm border-b-2 transition-colors ${
+            activeTab === 'verifyTransactions'
+              ? 'border-[var(--primary)] text-[var(--primary)]'
+              : 'border-transparent text-[var(--text-light)] hover:text-[var(--primary)]'
+          }`}
+          onClick={() => setActiveTab('verifyTransactions')}
+        >
+          <span className="flex items-center">
+            <FaTasks className="w-4 h-4 mr-2" />
+            Verify Transactions
+          </span>
+        </button>
       </div>
 
       {/* Tab Content */}
@@ -166,6 +195,17 @@ const AdminDashboard = () => {
         {activeTab === 'revenue' && <RevenueReport />}
         {activeTab === 'subscriptions' && <SubscriptionManagement />}
         {activeTab === 'moderation' && <ModerationPanel />}
+        {activeTab === 'paymentMethods' && (
+          <div className="space-y-8 p-4 md:p-6">
+            <GlobalPaymentMethodsManager />
+            <CountryPaymentMethodsManager />
+          </div>
+        )}
+        {activeTab === 'verifyTransactions' && (
+          <div className="p-4 md:p-6"> {/* Added padding */}
+            <AdminTransactionVerification />
+          </div>
+        )}
       </div>
     </div>
   );
