@@ -11,6 +11,8 @@ router.get('/packages/:id', subscriptionController.getPackage);
 router.get('/user', isAuthenticated, subscriptionController.getUserSubscription);
 router.post('/subscribe', isAuthenticated, subscriptionController.createSubscription);
 router.post('/cancel/:subscriptionId', isAuthenticated, subscriptionController.cancelSubscription);
+router.post('/upgrade', isAuthenticated, subscriptionController.upgradeSubscription);
+router.post('/downgrade', isAuthenticated, subscriptionController.downgradeSubscription);
 
 // Admin routes
 router.post('/packages', isAuthenticated, isAdmin, subscriptionController.createPackage);

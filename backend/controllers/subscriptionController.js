@@ -28,12 +28,14 @@ const subscriptionController = {
 
   createPackage: async (req, res) => {
     try {
-      const { name, price, billing_interval, features } = req.body;
+      const { name, price, billing_interval, tier_level, description, duration_months } = req.body;
       const pkg = await Subscription.createPackage({
         name,
         price,
         billing_interval,
-        features
+        tier_level,
+        description,
+        duration_months
       });
       res.status(201).json(pkg);
     } catch (err) {
@@ -45,13 +47,15 @@ const subscriptionController = {
   updatePackage: async (req, res) => {
     try {
       const { id } = req.params;
-      const { name, price, billing_interval, is_active, features } = req.body;
+      const { name, price, billing_interval, is_active, tier_level, description, duration_months } = req.body;
       const pkg = await Subscription.updatePackage(id, {
         name,
         price,
         billing_interval,
         is_active,
-        features
+        tier_level,
+        description,
+        duration_months
       });
       res.json(pkg);
     } catch (err) {
@@ -127,6 +131,144 @@ const subscriptionController = {
     } catch (err) {
       console.error('Error cancelling subscription:', err);
       res.status(500).json({ message: 'Failed to cancel subscription' });
+    }
+  },
+
+  upgradeSubscription: async (req, res) => {
+    const { newPackageId } = req.body;
+    const userId = req.user.id;
+
+    try {
+      const currentSubscription = await Subscription.getUserSubscription(userId);
+      if (!currentSubscription) {
+        return res.status(404).json({ message: 'No active subscription found to upgrade.' });
+      }
+
+      if (currentSubscription.package_id === newPackageId) {
+        return res.status(400).json({ message: 'Cannot upgrade to the same package.' });
+      }
+
+      const newPackage = await Subscription.getPackageById(newPackageId);
+      if (!newPackage) {
+        return res.status(404).json({ message: 'New package not found.' });
+      }
+
+      // Optional: Add more sophisticated upgrade logic (e.g., check price or tier_level hierarchy)
+      // For V1, any different package is considered an upgrade via this endpoint.
+
+      // Create Stripe payment intent for the new package
+      // Assuming paymentMethodId is re-used or a new one is provided by frontend if necessary.
+      // For simplicity, this example assumes the frontend handles collecting a new paymentMethodId if needed
+      // and passes it. If not, we might need to use a saved payment method.
+      // This example proceeds as if a new payment intent is made for the full price of the new package.
+      const paymentMethodIdFromBody = req.body.paymentMethodId;
+      if (!paymentMethodIdFromBody) {
+          // Attempt to use existing payment method from current subscription if available and appropriate
+          // This part is complex and depends on how payment methods are stored and managed.
+          // For V1, requiring paymentMethodId for upgrade is simpler.
+          return res.status(400).json({ message: 'Payment method ID is required for upgrade.' });
+      }
+
+      const paymentIntent = await stripe.paymentIntents.create({
+        amount: Math.round(newPackage.price * 100), // Price in cents
+        currency: 'usd',
+        payment_method: paymentMethodIdFromBody,
+        confirm: true,
+        // customer: currentSubscription.stripe_customer_id, // Removed for V1 simplicity, requires stripe_customer_id to be stored and retrieved
+        return_url: `${env.FRONTEND_URL}/subscription/confirmation` // Example URL
+      });
+
+      if (paymentIntent.status === 'succeeded') {
+        // Cancel the old subscription
+        await Subscription.cancelSubscription(currentSubscription.id);
+
+        // Create the new subscription
+        const newSubscriptionData = await Subscription.createUserSubscription({
+          userId,
+          packageId: newPackageId,
+          paymentMethodId: paymentMethodIdFromBody // Or paymentIntent.payment_method if it's a new one
+        });
+
+        res.json({
+          subscription: newSubscriptionData,
+          message: 'Subscription upgraded successfully.'
+        });
+      } else {
+        res.status(400).json({
+          message: 'Payment for upgrade failed.',
+          status: paymentIntent.status
+        });
+      }
+    } catch (err) {
+      console.error('Error upgrading subscription:', err);
+      res.status(500).json({ message: 'Failed to upgrade subscription.', error: err.message });
+    }
+  },
+
+  downgradeSubscription: async (req, res) => {
+    const { newPackageId } = req.body;
+    const userId = req.user.id;
+
+    try {
+      const currentSubscription = await Subscription.getUserSubscription(userId);
+      if (!currentSubscription) {
+        return res.status(404).json({ message: 'No active subscription found to downgrade.' });
+      }
+
+      if (currentSubscription.package_id === newPackageId) {
+        return res.status(400).json({ message: 'Cannot downgrade to the same package.' });
+      }
+
+      const newPackage = await Subscription.getPackageById(newPackageId);
+      if (!newPackage) {
+        return res.status(404).json({ message: 'New package not found.' });
+      }
+
+      // Optional: Add more sophisticated downgrade logic (e.g., check price or tier_level hierarchy)
+      // For V1, using "cancel old, create new". This means user is charged for the new (lower) tier
+      // and starts a new term. No refunds/proration for V1.
+
+      const paymentMethodIdFromBody = req.body.paymentMethodId;
+      if (!paymentMethodIdFromBody) {
+           return res.status(400).json({ message: 'Payment method ID is required for downgrade.' });
+      }
+      // const paymentMethodToUse = paymentMethodIdFromBody; // Simplified for V1
+
+
+      // For "cancel old, create new", we still charge for the new package's term.
+      const paymentIntent = await stripe.paymentIntents.create({
+        amount: Math.round(newPackage.price * 100), // Price in cents
+        currency: 'usd',
+        payment_method: paymentMethodIdFromBody, // Using the one from body directly
+        confirm: true,
+        // customer: currentSubscription.stripe_customer_id, // Removed for V1 simplicity
+        return_url: `${env.FRONTEND_URL}/subscription/confirmation` // Example URL
+      });
+
+      if (paymentIntent.status === 'succeeded') {
+        // Cancel the old subscription
+        await Subscription.cancelSubscription(currentSubscription.id);
+
+        // Create the new subscription
+        const newSubscriptionData = await Subscription.createUserSubscription({
+          userId,
+          packageId: newPackageId,
+          paymentMethodId: paymentMethodIdFromBody // Using the one from body
+        });
+
+        res.json({
+          subscription: newSubscriptionData,
+          message: 'Subscription downgraded successfully. New term started.'
+        });
+      } else {
+        res.status(400).json({
+          message: 'Payment for downgrade failed.',
+          status: paymentIntent.status
+        });
+      }
+    } catch (err) {
+      console.error('Error downgrading subscription:', err);
+      res.status(500).json({ message: 'Failed to downgrade subscription.', error: err.message });
     }
   }
 };

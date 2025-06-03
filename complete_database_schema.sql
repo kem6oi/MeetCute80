@@ -307,7 +307,7 @@ CREATE TABLE public.feature_permissions (
     feature_key character varying(50) NOT NULL,
     basic_access boolean DEFAULT false,
     premium_access boolean DEFAULT false,
-    elite_access boolean DEFAULT true,
+    elite_access boolean DEFAULT false,
     description text,
     created_at timestamp with time zone DEFAULT CURRENT_TIMESTAMP
 );
@@ -350,7 +350,7 @@ CREATE TABLE public.gift_items (
     category character varying(50),
     is_available boolean DEFAULT true,
     created_at timestamp without time zone DEFAULT CURRENT_TIMESTAMP,
-    tier_id integer
+    required_tier_level character varying(20)
 );
 
 
@@ -376,44 +376,6 @@ ALTER SEQUENCE public.gift_items_id_seq OWNER TO postgres;
 --
 
 ALTER SEQUENCE public.gift_items_id_seq OWNED BY public.gift_items.id;
-
-
---
--- Name: gift_tiers; Type: TABLE; Schema: public; Owner: postgres
---
-
-CREATE TABLE public.gift_tiers (
-    id integer NOT NULL,
-    name character varying(50) NOT NULL,
-    min_subscription_level character varying(20) NOT NULL,
-    description text,
-    created_at timestamp with time zone DEFAULT CURRENT_TIMESTAMP,
-    CONSTRAINT gift_tiers_min_subscription_level_check CHECK (((min_subscription_level)::text = ANY ((ARRAY['Basic'::character varying, 'Premium'::character varying, 'Elite'::character varying])::text[])))
-);
-
-
-ALTER TABLE public.gift_tiers OWNER TO postgres;
-
---
--- Name: gift_tiers_id_seq; Type: SEQUENCE; Schema: public; Owner: postgres
---
-
-CREATE SEQUENCE public.gift_tiers_id_seq
-    AS integer
-    START WITH 1
-    INCREMENT BY 1
-    NO MINVALUE
-    NO MAXVALUE
-    CACHE 1;
-
-
-ALTER SEQUENCE public.gift_tiers_id_seq OWNER TO postgres;
-
---
--- Name: gift_tiers_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: postgres
---
-
-ALTER SEQUENCE public.gift_tiers_id_seq OWNED BY public.gift_tiers.id;
 
 
 --
@@ -764,12 +726,10 @@ ALTER SEQUENCE public.reported_content_id_seq OWNED BY public.reported_content.i
 
 CREATE TABLE public.subscription_features (
     id integer NOT NULL,
-    package_id integer,
     feature_name character varying(200) NOT NULL,
     feature_description text,
     created_at timestamp with time zone DEFAULT CURRENT_TIMESTAMP,
-    premium_only boolean DEFAULT false,
-    elite_only boolean DEFAULT false
+    tier_level character varying(20)
 );
 
 
@@ -811,7 +771,7 @@ CREATE TABLE public.subscription_packages (
     updated_at timestamp with time zone DEFAULT CURRENT_TIMESTAMP,
     description text,
     duration_months integer DEFAULT 1,
-    tier_level character varying(20),
+    tier_level character varying(20) UNIQUE,
     CONSTRAINT subscription_packages_tier_level_check CHECK (((tier_level)::text = ANY ((ARRAY['Basic'::character varying, 'Premium'::character varying, 'Elite'::character varying])::text[])))
 );
 
@@ -1170,13 +1130,6 @@ ALTER TABLE ONLY public.gift_items ALTER COLUMN id SET DEFAULT nextval('public.g
 
 
 --
--- Name: gift_tiers id; Type: DEFAULT; Schema: public; Owner: postgres
---
-
-ALTER TABLE ONLY public.gift_tiers ALTER COLUMN id SET DEFAULT nextval('public.gift_tiers_id_seq'::regclass);
-
-
---
 -- Name: likes id; Type: DEFAULT; Schema: public; Owner: postgres
 --
 
@@ -1368,19 +1321,11 @@ ALTER TABLE ONLY public.gift_items
 
 
 --
--- Name: gift_tiers gift_tiers_name_key; Type: CONSTRAINT; Schema: public; Owner: postgres
+-- Name: gift_items gift_items_required_tier_level_fkey; Type: FK CONSTRAINT; Schema: public; Owner: postgres
 --
 
-ALTER TABLE ONLY public.gift_tiers
-    ADD CONSTRAINT gift_tiers_name_key UNIQUE (name);
-
-
---
--- Name: gift_tiers gift_tiers_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
---
-
-ALTER TABLE ONLY public.gift_tiers
-    ADD CONSTRAINT gift_tiers_pkey PRIMARY KEY (id);
+ALTER TABLE ONLY public.gift_items
+    ADD CONSTRAINT gift_items_required_tier_level_fkey FOREIGN KEY (required_tier_level) REFERENCES public.subscription_packages(tier_level);
 
 
 --
@@ -1501,6 +1446,14 @@ ALTER TABLE ONLY public.reported_content
 
 ALTER TABLE ONLY public.subscription_features
     ADD CONSTRAINT subscription_features_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: subscription_features subscription_features_tier_level_fkey; Type: FK CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.subscription_features
+    ADD CONSTRAINT subscription_features_tier_level_fkey FOREIGN KEY (tier_level) REFERENCES public.subscription_packages(tier_level);
 
 
 --
@@ -1739,10 +1692,10 @@ CREATE INDEX idx_reported_content_type ON public.reported_content USING btree (t
 
 
 --
--- Name: idx_subscription_features_package; Type: INDEX; Schema: public; Owner: postgres
+-- Name: idx_subscription_features_tier_level; Type: INDEX; Schema: public; Owner: postgres
 --
 
-CREATE INDEX idx_subscription_features_package ON public.subscription_features USING btree (package_id);
+CREATE INDEX idx_subscription_features_tier_level ON public.subscription_features USING btree (tier_level);
 
 
 --
@@ -1886,11 +1839,7 @@ ALTER TABLE ONLY public.country_payment_methods
 
 
 --
--- Name: gift_items gift_items_tier_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: postgres
---
-
-ALTER TABLE ONLY public.gift_items
-    ADD CONSTRAINT gift_items_tier_id_fkey FOREIGN KEY (tier_id) REFERENCES public.gift_tiers(id);
+-- The old gift_items_tier_id_fkey was removed because gift_tiers table is dropped.
 
 
 --
@@ -2003,14 +1952,6 @@ ALTER TABLE ONLY public.reported_content
 
 ALTER TABLE ONLY public.reported_content
     ADD CONSTRAINT reported_content_reviewed_by_fkey FOREIGN KEY (reviewed_by) REFERENCES public.users(id) ON DELETE SET NULL;
-
-
---
--- Name: subscription_features subscription_features_package_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: postgres
---
-
-ALTER TABLE ONLY public.subscription_features
-    ADD CONSTRAINT subscription_features_package_id_fkey FOREIGN KEY (package_id) REFERENCES public.subscription_packages(id) ON DELETE CASCADE;
 
 
 --

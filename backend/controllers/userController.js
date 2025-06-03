@@ -1,5 +1,6 @@
 const User = require('../models/User');
 const Profile = require('../models/Profile');
+const Like = require('../models/Like'); // Added Like model
 const { validateProfile } = require('../utils/validation');
 
 exports.getCurrentUserProfile = async (req, res) => {
@@ -51,5 +52,20 @@ exports.updateProfile = async (req, res) => {
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Failed to update profile' });
+  }
+};
+
+/**
+ * Gets a list of users who have liked the currently authenticated user.
+ * This route will be protected by isAuthenticated and checkFeatureAccess('whoLikesYou').
+ */
+exports.getWhoLikedMe = async (req, res) => {
+  try {
+    const userId = req.user.id; // Assuming isAuthenticated populates req.user
+    const likers = await Like.getUsersWhoLiked(userId);
+    res.json(likers);
+  } catch (err) {
+    console.error('Error in getWhoLikedMe controller:', err);
+    res.status(500).json({ error: 'Failed to retrieve users who liked you.' });
   }
 };
