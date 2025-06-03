@@ -22,6 +22,7 @@ const videoChatRoutes = require('./routes/videoChatRoutes');
 const paymentMethodAdminRoutes = require('./routes/paymentMethodAdminRoutes');
 const transactionRoutes = require('./routes/transactionRoutes');
 const adminTransactionRoutes = require('./routes/adminTransactionRoutes');
+const balanceRoutes = require('./routes/balanceRoutes'); // Import balanceRoutes
 
 const app = express();
 
@@ -65,6 +66,7 @@ app.use('/api/videochat', videoChatRoutes);
 app.use('/api/admin/payment-configurations', paymentMethodAdminRoutes);
 app.use('/api/transactions', transactionRoutes);
 app.use('/api/admin/transactions', adminTransactionRoutes);
+app.use('/api/balance', balanceRoutes); // Mount balanceRoutes
 
 // Add direct routes for backward compatibility with frontend
 app.get('/subscription/packages', (req, res) => {
