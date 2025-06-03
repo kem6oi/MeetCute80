@@ -1,4 +1,5 @@
 const pool = require('../config/db');
+const UserBalance = require('./UserBalance');
 
 class Gift {
   // Tier hierarchy for gift sending permissions
@@ -52,7 +53,7 @@ class Gift {
   }
 
   // User Gifts Methods
-  static async sendGift({ senderId, recipientId, giftItemId, message, isAnonymous }) {
+  static async sendGift({ senderId, recipientId, giftItemId, message, isAnonymous, useSiteBalance = false }) {
     const client = await pool.connect();
     try {
       await client.query('BEGIN');
@@ -95,19 +96,33 @@ class Gift {
       // 4. Insert into user_gifts
       const userGiftResult = await client.query(
         `INSERT INTO user_gifts
-         (sender_id, recipient_id, gift_item_id, message, is_anonymous)
-         VALUES ($1, $2, $3, $4, $5)
+         (sender_id, recipient_id, gift_item_id, message, is_anonymous, original_purchase_price)
+         VALUES ($1, $2, $3, $4, $5, $6)
          RETURNING *`,
-        [senderId, recipientId, giftItemId, message, isAnonymous]
+        [senderId, recipientId, giftItemId, message, isAnonymous, giftItem.price]
       );
       const createdUserGift = userGiftResult.rows[0];
 
-      // 5. Insert into transactions
-      await client.query(
-        `INSERT INTO transactions (user_id, type, amount, status)
-         VALUES ($1, 'gift', $2, 'completed')`,
-        [senderId, giftItem.price]
-      );
+      // 5. Handle transaction recording based on useSiteBalance
+      if (useSiteBalance) {
+        // Debit from site balance
+        await UserBalance.debit(senderId, parseFloat(giftItem.price), client);
+        // Record transaction as paid with site balance
+        await client.query(
+          `INSERT INTO transactions (user_id, type, amount, status, item_category, payable_item_id, payment_method_details)
+           VALUES ($1, $2, $3, 'completed', 'gift', $4, $5)`,
+          [senderId, 'gift_site_balance', giftItem.price, giftItemId, 'Paid with site balance']
+        );
+      } else {
+        // TODO: Implement actual payment gateway logic here for real money transactions.
+        // For now, it logs as 'gift' and 'completed' as before, implying direct successful payment.
+        // In a real scenario, this might be 'pending_payment' until webhook confirmation.
+        await client.query(
+          `INSERT INTO transactions (user_id, type, amount, status, item_category, payable_item_id)
+           VALUES ($1, 'gift', $2, 'completed', 'gift', $3)`,
+          [senderId, giftItem.price, giftItemId]
+        );
+      }
 
       await client.query('COMMIT');
       return createdUserGift;
@@ -170,6 +185,69 @@ class Gift {
       [userId]
     );
     return parseInt(result.rows[0].count);
+  }
+
+  static async redeemGift(userGiftId, userId) {
+    const client = await pool.connect();
+    try {
+        await client.query('BEGIN');
+
+        // 1. Fetch the user_gift and ensure it belongs to the user and is not redeemed
+        const giftResult = await client.query(
+            `SELECT ug.*, gi.name as gift_item_name
+             FROM user_gifts ug
+             JOIN gift_items gi ON ug.gift_item_id = gi.id
+             WHERE ug.id = $1 AND ug.recipient_id = $2 FOR UPDATE`,
+            [userGiftId, userId]
+        );
+        const userGift = giftResult.rows[0];
+
+        if (!userGift) {
+            throw new Error('Gift not found or does not belong to the user.');
+        }
+        if (userGift.is_redeemed) {
+            throw new Error('Gift has already been redeemed.');
+        }
+        if (userGift.original_purchase_price == null) {
+            // This case should ideally not happen if sendGift is updated correctly
+            console.error(`Attempted to redeem gift ${userGiftId} with null original_purchase_price.`);
+            throw new Error('Cannot redeem gift: original purchase price not recorded.');
+        }
+
+        // 2. Calculate redeemed_value (73%)
+        const originalPrice = parseFloat(userGift.original_purchase_price);
+        const redeemedValue = parseFloat((originalPrice * 0.73).toFixed(2));
+
+        // 3. Update user_gifts table
+        const updatedGiftResult = await client.query(
+            `UPDATE user_gifts
+             SET is_redeemed = TRUE, redeemed_at = CURRENT_TIMESTAMP, redeemed_value = $1
+             WHERE id = $2
+             RETURNING *`,
+            [redeemedValue, userGiftId]
+        );
+        const updatedGift = updatedGiftResult.rows[0];
+
+
+        // 4. Credit user's balance
+        const updatedBalance = await UserBalance.credit(userId, redeemedValue, client);
+
+        // 5. TODO: Log this balance transaction for auditing (e.g., in a new balance_transactions table)
+        // For now, console.log for tracing
+        console.log(`User ${userId} redeemed gift ${userGift.id} (item: ${userGift.gift_item_name}) for ${redeemedValue}. New balance: ${updatedBalance.balance}`);
+
+        await client.query('COMMIT');
+        return {
+            redeemedGift: updatedGift,
+            newBalance: updatedBalance.balance
+        };
+    } catch (error) {
+        await client.query('ROLLBACK');
+        console.error('Error in redeemGift transaction:', error.message, error.stack);
+        throw error;
+    } finally {
+        client.release();
+    }
   }
 }
 

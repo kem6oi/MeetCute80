@@ -7,9 +7,10 @@ import SubscriptionManagement from '../components/Admin/SubscriptionManagement';
 import AdminStats from '../components/Admin/AdminStats';
 import GlobalPaymentMethodsManager from '../components/Admin/GlobalPaymentMethodsManager';
 import CountryPaymentMethodsManager from '../components/Admin/CountryPaymentMethodsManager';
-import AdminTransactionVerification from '../components/Admin/AdminTransactionVerification'; // Import new component
+import AdminTransactionVerification from '../components/Admin/AdminTransactionVerification';
+import AdminWithdrawalsPage from './Admin/AdminWithdrawalsPage'; // Import AdminWithdrawalsPage
 import api from '../utils/api';
-import { FaUsers, FaChartLine, FaShieldAlt, FaTags, FaMoneyCheckAlt, FaTasks } from 'react-icons/fa'; // Added FaTasks
+import { FaUsers, FaChartLine, FaShieldAlt, FaTags, FaMoneyCheckAlt, FaTasks, FaHandHoldingUsd } from 'react-icons/fa'; // Added FaHandHoldingUsd
 
 const AdminDashboard = () => {
   const { currentUser } = useAuth();
@@ -187,6 +188,19 @@ const AdminDashboard = () => {
             Verify Transactions
           </span>
         </button>
+        <button
+          className={`py-3 px-6 font-medium text-sm border-b-2 transition-colors ${
+            activeTab === 'withdrawals'
+              ? 'border-[var(--primary)] text-[var(--primary)]'
+              : 'border-transparent text-[var(--text-light)] hover:text-[var(--primary)]'
+          }`}
+          onClick={() => setActiveTab('withdrawals')}
+        >
+          <span className="flex items-center">
+            <FaHandHoldingUsd className="w-4 h-4 mr-2" />
+            Withdrawal Requests
+          </span>
+        </button>
       </div>
 
       {/* Tab Content */}
@@ -202,8 +216,13 @@ const AdminDashboard = () => {
           </div>
         )}
         {activeTab === 'verifyTransactions' && (
-          <div className="p-4 md:p-6"> {/* Added padding */}
+          <div className="p-4 md:p-6">
             <AdminTransactionVerification />
+          </div>
+        )}
+        {activeTab === 'withdrawals' && (
+          <div className="p-0"> {/* AdminWithdrawalsPage has its own padding */}
+            <AdminWithdrawalsPage />
           </div>
         )}
       </div>

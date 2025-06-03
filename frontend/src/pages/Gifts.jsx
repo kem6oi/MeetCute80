@@ -1,8 +1,9 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react'; // Added useMemo
 import { useAuth } from '../context/AuthContext';
-import { useSubscription } from '../context/SubscriptionContext'; // Added
-import api from '../utils/api'; // Added
-import { FaGift, FaPaperPlane, FaInbox, FaLock, FaCrown } from 'react-icons/fa';
+import { useSubscription } from '../context/SubscriptionContext';
+import api from '../utils/api';
+import { FaGift, FaPaperPlane, FaInbox, FaLock, FaCrown, FaRedeem, FaCheckCircle } from 'react-icons/fa'; // Added FaRedeem, FaCheckCircle
+import { balanceEventEmitter } from '../components/UserBalanceDisplay'; // Import the event emitter
 
 const TIER_VALUE = { 'Basic': 1, 'Premium': 2, 'Elite': 3 };
 
@@ -12,13 +13,23 @@ const Gifts = () => {
   const [receivedGifts, setReceivedGifts] = useState([]);
   const [sentGifts, setSentGifts] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(null);
+  const [error, setError] = useState(null); // General error for page
   const [selectedGift, setSelectedGift] = useState(null);
-  const [recipientId, setRecipientId] = useState(''); // Consider changing to a user search/select component
+  const [recipientId, setRecipientId] = useState('');
   const [message, setMessage] = useState('');
   const [isAnonymous, setIsAnonymous] = useState(false);
 
-  const { authState } = useAuth(); // authState.user contains token if using global api setup
+  // State for redemption
+  const [redeemLoading, setRedeemLoading] = useState(null); // Store ID of gift being redeemed
+  const [redeemError, setRedeemError] = useState(null);
+  // Confirmation modal could be more complex, for now, not adding specific state for it, will use window.confirm
+  const [currentBalance, setCurrentBalance] = useState(null);
+  const [useSiteBalanceForGift, setUseSiteBalanceForGift] = useState(true); // Default to true if possible
+  const [sendGiftLoading, setSendGiftLoading] = useState(false); // Specific loading for sending gift
+  const [sendGiftError, setSendGiftError] = useState(null);
+
+
+  const { currentUser } = useAuth();
   const { subscription: userSubscription, isLoading: isSubscriptionLoading } = useSubscription();
 
   const userTierValue = useMemo(() =>
@@ -49,16 +60,31 @@ const Gifts = () => {
     }
   }, [activeTab]);
 
+  const fetchCurrentBalance = useCallback(async () => {
+    try {
+        const response = await api.get('/api/balance');
+        setCurrentBalance(parseFloat(response.data.balance));
+    } catch (err) {
+        console.error("Error fetching current balance for gift modal:", err);
+        // Not setting a page-level error for this, UserBalanceDisplay handles its own errors
+    }
+  }, []);
+
   useEffect(() => {
-    if (authState.isAuthenticated) { // Only fetch if authenticated
+    if (currentUser) { // Only fetch if authenticated
       fetchData();
+      fetchCurrentBalance(); // Fetch balance when component mounts or user changes
+
+      // Listen to balance changes to update local balance for gift modal
+      const unsubscribe = balanceEventEmitter.subscribe(fetchCurrentBalance);
+      return unsubscribe;
     } else {
-      setLoading(false); // Not authenticated, not loading
+      setLoading(false);
       setGiftItems([]);
       setReceivedGifts([]);
       setSentGifts([]);
     }
-  }, [activeTab, authState.isAuthenticated, fetchData]);
+  }, [activeTab, currentUser, fetchData]); // Using currentUser from useAuth
 
 
   const handleSelectGift = (gift) => {
@@ -66,7 +92,13 @@ const Gifts = () => {
     const canSend = userTierValue >= requiredTierValue;
     if (canSend) {
       setSelectedGift(gift);
-      setError(null); // Clear previous errors
+      setSendGiftError(null); // Clear previous send errors
+      // Check if balance is sufficient and set default for checkbox
+      if (currentBalance !== null && selectedGift && parseFloat(currentBalance) >= parseFloat(gift.price)) {
+        setUseSiteBalanceForGift(true);
+      } else {
+        setUseSiteBalanceForGift(false);
+      }
     } else {
       setSelectedGift(null);
       setError(`You need to be ${gift.required_tier_level} tier or higher to select this gift.`);
@@ -75,47 +107,50 @@ const Gifts = () => {
 
   const handleSendGift = async () => {
     if (!selectedGift || !recipientId) {
-      setError('Please select a gift and specify a recipient user ID.');
+      setSendGiftError('Please select a gift and specify a recipient user ID.');
       return;
     }
 
     const requiredTierValue = TIER_VALUE[selectedGift.required_tier_level || 'Basic'] || 0;
     if (userTierValue < requiredTierValue) {
-      setError(`Your current subscription tier (${userSubscription?.tier_level || 'Basic'}) does not allow sending this ${selectedGift.required_tier_level || 'Basic'} gift. Please upgrade your subscription.`);
+      setSendGiftError(`Your current subscription tier (${userSubscription?.tier_level || 'Basic'}) does not allow sending this ${selectedGift.required_tier_level || 'Basic'} gift. Please upgrade your subscription.`);
       return;
     }
 
-    setLoading(true); // Indicate processing for send gift
-    setError(null);
+    if (useSiteBalanceForGift && (currentBalance === null || parseFloat(currentBalance) < parseFloat(selectedGift.price))) {
+      setSendGiftError('Insufficient balance to send this gift using site balance. Please uncheck the option or add funds (if applicable).');
+      return;
+    }
+
+    setSendGiftLoading(true);
+    setSendGiftError(null);
     try {
       await api.post('/gifts/send', {
         recipientId,
         giftItemId: selectedGift.id,
         message,
-        isAnonymous
+        isAnonymous,
+        useSiteBalance: useSiteBalanceForGift // Pass the flag
       });
+
+      if (useSiteBalanceForGift) {
+        balanceEventEmitter.emit(); // Refresh balance if used
+      }
 
       setSelectedGift(null);
       setRecipientId('');
       setMessage('');
       setIsAnonymous(false);
+      setUseSiteBalanceForGift(true); // Reset for next time
       alert('Gift sent successfully!');
-      // Optionally, refetch sent gifts if staying on the page or navigating
       if (activeTab === 'sent') {
-        fetchData();
+        fetchData(); // Refresh sent gifts tab
       }
     } catch (err) {
       console.error('Error sending gift:', err);
-      if (err.response && err.response.status === 403) {
-        setError(err.response.data.error || 'You are not allowed to send this gift due to tier restrictions.');
-      } else if (err.response && err.response.status === 404) {
-        setError(err.response.data.error || 'Recipient or gift not found.');
-      }
-      else {
-        setError(err.response?.data?.error || 'Failed to send gift.');
-      }
+      setSendGiftError(err.response?.data?.error || 'Failed to send gift.');
     } finally {
-      setLoading(false);
+      setSendGiftLoading(false);
     }
   };
 
@@ -131,8 +166,40 @@ const Gifts = () => {
     return 'bg-gray-400 text-white';
   }
 
+  const handleRedeemGift = async (userGiftId, potentialValue) => {
+    if (!window.confirm(`Are you sure you want to redeem this gift for $${potentialValue}? This action cannot be undone.`)) {
+      return;
+    }
 
-  if (loading || (authState.isAuthenticated && isSubscriptionLoading)) {
+    setRedeemLoading(userGiftId);
+    setRedeemError(null);
+    try {
+      const response = await api.post(`/api/gifts/received/${userGiftId}/redeem`);
+      // Update the specific gift in the receivedGifts state
+      setReceivedGifts(prevGifts =>
+        prevGifts.map(gift =>
+          gift.id === userGiftId
+            ? { ...gift,
+                is_redeemed: true,
+                redeemed_value: response.data.redeemedAmount,
+                redeemed_at: new Date().toISOString() // Or use response.data.redeemedGift.redeemed_at if available
+              }
+            : gift
+        )
+      );
+      balanceEventEmitter.emit(); // Notify balance display to refresh
+      alert(response.data.message || 'Gift redeemed successfully!'); // Or use a more sophisticated notification
+    } catch (err) {
+      console.error('Error redeeming gift:', err);
+      setRedeemError(err.response?.data?.error || 'Failed to redeem gift.');
+      // Display this error near the specific gift or as a general notification
+    } finally {
+      setRedeemLoading(null);
+    }
+  };
+
+
+  if (loading || (currentUser && isSubscriptionLoading)) { // Check currentUser for auth state
     return (
       <div className="flex justify-center items-center min-h-screen">
         <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-[var(--primary)]"></div>
@@ -140,7 +207,7 @@ const Gifts = () => {
     );
   }
 
-  if (!authState.isAuthenticated) {
+  if (!currentUser) { // Check currentUser for auth state
       return <div className="p-6 text-center text-gray-600">Please log in to view gifts.</div>
   }
 
@@ -180,7 +247,52 @@ const Gifts = () => {
       {/* Available Gifts */}
       {activeTab === 'available' && (
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
-          {giftItems.map(gift => {
+          {giftItems.map(giftItem => { // Renamed to giftItem for clarity
+            const requiredTierValue = TIER_VALUE[giftItem.required_tier_level || 'Basic'] || 0;
+            const canSend = userTierValue >= requiredTierValue;
+            const isSelected = selectedGift?.id === giftItem.id;
+
+            return (
+              <div
+                key={giftItem.id}
+                className={`bg-slate-800 rounded-xl shadow-xl overflow-hidden transition-all duration-200 ease-in-out
+                  ${canSend ? 'cursor-pointer hover:shadow-purple-500/30' : 'opacity-60 cursor-not-allowed'}
+                  ${isSelected && canSend ? 'ring-2 ring-purple-500 scale-105 shadow-purple-500/50' : 'hover:scale-105'}
+                `}
+                onClick={() => handleSelectGift(giftItem)}
+              >
+                <div className="relative h-56">
+                  {giftItem.image_url ? (
+                    <img src={giftItem.image_url} alt={giftItem.name} className="w-full h-full object-cover"/>
+                  ) : (
+                    <div className="w-full h-full bg-slate-700 flex items-center justify-center">
+                      <FaGift className="text-5xl text-slate-500" />
+                    </div>
+                  )}
+                  {!canSend && (
+                    <div className="absolute inset-0 bg-black/50 flex flex-col items-center justify-center p-4">
+                      <FaLock className="text-4xl text-yellow-400 mb-2" />
+                      <p className="text-yellow-300 text-center text-sm">
+                        Requires {giftItem.required_tier_level || 'Basic'} Tier
+                      </p>
+                    </div>
+                  )}
+                   {giftItem.required_tier_level && giftItem.required_tier_level !== 'Basic' && canSend && (
+                     <span className={`absolute top-2 right-2 text-xs font-semibold px-2 py-1 rounded-full shadow-md ${getTierBadgeColor(giftItem.required_tier_level)}`}>
+                        {giftItem.required_tier_level} Tier Gift
+                     </span>
+                   )}
+                </div>
+                <div className="p-5">
+                  <h3 className="text-xl font-bold text-transparent bg-clip-text bg-gradient-to-r from-purple-400 to-pink-500 mb-2 truncate" title={giftItem.name}>{giftItem.name}</h3>
+                  <p className="text-slate-400 text-sm mb-3 h-10 overflow-hidden" title={giftItem.description}>{giftItem.description || 'A wonderful gift.'}</p>
+                  <p className="text-2xl font-semibold text-green-400">${giftItem.price}</p>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
             const requiredTierValue = TIER_VALUE[gift.required_tier_level || 'Basic'] || 0;
             const canSend = userTierValue >= requiredTierValue;
             const isSelected = selectedGift?.id === gift.id;
@@ -229,16 +341,22 @@ const Gifts = () => {
 
       {/* Send Gift Form - Modal or Collapsible Section would be better */}
       {activeTab === 'available' && selectedGift && (
-         <div className="fixed inset-0 bg-slate-900/80 backdrop-blur-sm flex items-center justify-center p-4 z-50" onClick={() => setSelectedGift(null)}>
+         <div className="fixed inset-0 bg-slate-900/80 backdrop-blur-sm flex items-center justify-center p-4 z-50" onClick={() => {setSelectedGift(null); setSendGiftError(null);}}>
           <div className="bg-slate-800 p-6 sm:p-8 rounded-xl shadow-2xl w-full max-w-md mx-auto" onClick={e => e.stopPropagation()}>
             <div className="flex justify-between items-center mb-6">
                 <h3 className="text-2xl font-bold text-transparent bg-clip-text bg-gradient-to-r from-purple-400 to-pink-500">Send "{selectedGift.name}"</h3>
-                <button onClick={() => setSelectedGift(null)} className="text-slate-400 hover:text-slate-200 text-2xl">&times;</button>
+                <button onClick={() => {setSelectedGift(null); setSendGiftError(null);}} className="text-slate-400 hover:text-slate-200 text-2xl">&times;</button>
             </div>
-            {error && <p className="bg-red-700/30 text-red-300 p-3 rounded-md mb-4 text-sm">{error}</p>}
+            {sendGiftError && <p className="bg-red-700/30 text-red-300 p-3 rounded-md mb-4 text-sm">{sendGiftError}</p>}
             <div className="space-y-4">
+              <div className="text-center mb-2">
+                <p className="text-slate-300">Gift Price: <span className="font-semibold text-green-400">${selectedGift.price}</span></p>
+                {currentBalance !== null && (
+                  <p className="text-xs text-slate-400">Your Balance: ${currentBalance.toFixed(2)}</p>
+                )}
+              </div>
               <input
-                type="text" // In a real app, this should be a user search/select component
+                type="text"
                 placeholder="Recipient User ID (temp)"
                 value={recipientId}
                 onChange={(e) => setRecipientId(e.target.value)}
@@ -261,47 +379,123 @@ const Gifts = () => {
                 />
                 <label htmlFor="anonymous" className="text-sm text-slate-300">Send anonymously</label>
               </div>
+
+              {currentBalance !== null && parseFloat(currentBalance) >= parseFloat(selectedGift.price) && (
+                <div className="flex items-center">
+                  <input
+                    type="checkbox"
+                    id="useSiteBalance"
+                    checked={useSiteBalanceForGift}
+                    onChange={(e) => setUseSiteBalanceForGift(e.target.checked)}
+                    className="h-4 w-4 bg-slate-700 border-slate-600 text-purple-500 focus:ring-purple-500 rounded mr-2"
+                  />
+                  <label htmlFor="useSiteBalance" className="text-sm text-slate-300">Use my site balance (${currentBalance.toFixed(2)}) for this purchase</label>
+                </div>
+              )}
+
               <button
                 onClick={handleSendGift}
-                disabled={loading}
+                disabled={sendGiftLoading}
                 className="w-full bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-700 hover:to-pink-700 text-white px-6 py-3 rounded-lg font-semibold shadow-md hover:shadow-lg transition-all duration-150 ease-in-out disabled:opacity-70"
               >
-                {loading ? 'Sending...' : `Send Gift ($${selectedGift.price})`}
+                {sendGiftLoading ? 'Sending...' :
+                  (useSiteBalanceForGift && parseFloat(currentBalance) >= parseFloat(selectedGift.price)
+                    ? `Send Gift (from Balance: $${selectedGift.price})`
+                    : `Send Gift ($${selectedGift.price})`)}
               </button>
             </div>
           </div>
         </div>
       )}
 
-      {/* Received/Sent Gifts - Common Rendering Logic */}
-      {(activeTab === 'received' || activeTab === 'sent') && (
+      {/* Received Gifts */}
+      {activeTab === 'received' && (
+         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
+          {receivedGifts.map(gift => {
+            const potentialValue = gift.original_purchase_price
+              ? (parseFloat(gift.original_purchase_price) * 0.73).toFixed(2)
+              : null;
+            return (
+              <div key={gift.id} className={`bg-slate-800 rounded-xl shadow-xl overflow-hidden border-2 ${getTierColor(gift.required_tier_level)}`}>
+                <div className="relative h-56">
+                  {gift.image_url ? (
+                    <img src={gift.image_url} alt={gift.name} className="w-full h-full object-cover"/>
+                  ) : (
+                    <div className="w-full h-full bg-slate-700 flex items-center justify-center">
+                      <FaGift className="text-5xl text-slate-500" />
+                    </div>
+                  )}
+                  {gift.required_tier_level && gift.required_tier_level !== 'Basic' && (
+                       <span className={`absolute top-2 right-2 text-xs font-semibold px-2 py-1 rounded-full shadow-md ${getTierBadgeColor(gift.required_tier_level)}`}>
+                          {gift.required_tier_level} Tier
+                       </span>
+                  )}
+                </div>
+                <div className="p-5">
+                  <h3 className="text-xl font-bold text-transparent bg-clip-text bg-gradient-to-r from-purple-400 to-pink-500 mb-2 truncate" title={gift.name}>{gift.name}</h3>
+                  <p className="text-sm text-slate-400 mb-1">From: {gift.is_anonymous ? 'Anonymous' : gift.sender_name || 'Unknown User'}</p>
+                  {gift.message && <p className="text-slate-300 italic text-sm mb-2 h-10 overflow-y-auto">"{gift.message}"</p>}
+                  <p className="text-xs text-slate-500 mb-3">
+                    Received {new Date(gift.created_at).toLocaleDateString()}
+                  </p>
+
+                  {gift.is_redeemed ? (
+                    <div className="flex items-center text-green-400 text-sm p-2 bg-green-900/30 rounded-md">
+                      <FaCheckCircle className="mr-2" />
+                      Redeemed for ${gift.redeemed_value} on {new Date(gift.redeemed_at).toLocaleDateString()}
+                    </div>
+                  ) : potentialValue !== null ? (
+                    <div>
+                      <button
+                        onClick={() => handleRedeemGift(gift.id, potentialValue)}
+                        disabled={redeemLoading === gift.id}
+                        className="w-full flex items-center justify-center bg-gradient-to-r from-green-500 to-teal-500 hover:from-green-600 hover:to-teal-600 text-white px-4 py-2 rounded-lg font-semibold shadow-md hover:shadow-lg transition-all duration-150 ease-in-out disabled:opacity-70"
+                      >
+                        <FaRedeem className="mr-2" />
+                        {redeemLoading === gift.id ? 'Redeeming...' : `Redeem for $${potentialValue}`}
+                      </button>
+                      {redeemError && redeemLoading !== gift.id && gift.id === (receivedGifts.find(g => g.id === redeemLoading)?.id || null) && ( // Show error specific to this gift if it was the one attempted
+                        <p className="text-red-400 text-xs mt-1 text-center">{redeemError}</p>
+                      )}
+                    </div>
+                  ) : (
+                    <p className="text-xs text-slate-500">This gift cannot be redeemed (no purchase price recorded).</p>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* Sent Gifts */}
+      {activeTab === 'sent' && (
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
-          {(activeTab === 'received' ? receivedGifts : sentGifts).map(gift => (
-            <div key={gift.id} className={`bg-slate-800 rounded-xl shadow-xl overflow-hidden border-2 ${getTierColor(gift.required_tier_level)}`}>
-              <div className="relative h-56">
-                {gift.image_url ? (
-                  <img src={gift.image_url} alt={gift.name} className="w-full h-full object-cover"/>
-                ) : (
-                  <div className="w-full h-full bg-slate-700 flex items-center justify-center">
-                    <FaGift className="text-5xl text-slate-500" />
-                  </div>
-                )}
-                {gift.required_tier_level && gift.required_tier_level !== 'Basic' && (
-                     <span className={`absolute top-2 right-2 text-xs font-semibold px-2 py-1 rounded-full shadow-md ${getTierBadgeColor(gift.required_tier_level)}`}>
-                        {gift.required_tier_level} Tier
-                     </span>
-                )}
-              </div>
-              <div className="p-5">
-                <h3 className="text-xl font-bold text-transparent bg-clip-text bg-gradient-to-r from-purple-400 to-pink-500 mb-2 truncate" title={gift.name}>{gift.name}</h3>
-                 {activeTab === 'received' && <p className="text-sm text-slate-400 mb-1">From: {gift.is_anonymous ? 'Anonymous' : gift.sender_name || 'Unknown User'}</p>}
-                 {activeTab === 'sent' && <p className="text-sm text-slate-400 mb-1">To: {gift.recipient_name || 'Unknown User'}</p>}
-                {gift.message && <p className="text-slate-300 italic text-sm mb-2 h-10 overflow-y-auto">"{gift.message}"</p>}
-                <p className="text-xs text-slate-500">
-                  {activeTab === 'received' ? 'Received' : 'Sent'} {new Date(gift.created_at).toLocaleDateString()}
-                </p>
-              </div>
-            </div>
+          {sentGifts.map(gift => (
+             <div key={gift.id} className={`bg-slate-800 rounded-xl shadow-xl overflow-hidden border-2 ${getTierColor(gift.required_tier_level)}`}>
+             <div className="relative h-56">
+               {gift.image_url ? (
+                 <img src={gift.image_url} alt={gift.name} className="w-full h-full object-cover"/>
+               ) : (
+                 <div className="w-full h-full bg-slate-700 flex items-center justify-center">
+                   <FaGift className="text-5xl text-slate-500" />
+                 </div>
+               )}
+               {gift.required_tier_level && gift.required_tier_level !== 'Basic' && (
+                    <span className={`absolute top-2 right-2 text-xs font-semibold px-2 py-1 rounded-full shadow-md ${getTierBadgeColor(gift.required_tier_level)}`}>
+                       {gift.required_tier_level} Tier
+                    </span>
+               )}
+             </div>
+             <div className="p-5">
+               <h3 className="text-xl font-bold text-transparent bg-clip-text bg-gradient-to-r from-purple-400 to-pink-500 mb-2 truncate" title={gift.name}>{gift.name}</h3>
+               <p className="text-sm text-slate-400 mb-1">To: {gift.recipient_name || 'Unknown User'}</p>
+               {gift.message && <p className="text-slate-300 italic text-sm mb-2 h-10 overflow-y-auto">"{gift.message}"</p>}
+               <p className="text-xs text-slate-500">
+                 Sent {new Date(gift.created_at).toLocaleDateString()}
+               </p>
+             </div>
+           </div>
           ))}
         </div>
       )}

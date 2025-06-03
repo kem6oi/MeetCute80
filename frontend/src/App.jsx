@@ -7,10 +7,12 @@ import Login from './pages/Login';
 import Register from './pages/Register';
 import VerifyEmailPage from './pages/VerifyEmailPage'; // Added
 import ProfileSetup from './pages/ProfileSetup';
+import WithdrawalPage from './pages/WithdrawalPage'; // Import WithdrawalPage
 import Dashboard from './pages/Dashboard';
 import Discover from './pages/Discover';
 import Messages from './pages/Messages';
 import AdminDashboard from './pages/AdminDashboard';
+import AdminWithdrawalsPage from './pages/Admin/AdminWithdrawalsPage'; // Import AdminWithdrawalsPage
 import NotFound from './pages/NotFound';
 import Matches from './pages/Matches';
 import Gifts from './pages/Gifts';
@@ -59,11 +61,17 @@ function App() {
             <Route path="/pricing" element={<Pricing />} />
             <Route path="/profile" element={<Profile />} />
             <Route path="/settings" element={<Settings />} />
+            <Route path="/withdrawals" element={<PrivateRoute><WithdrawalPage /></PrivateRoute>} /> {/* Added WithdrawalPage route */}
           </Route>
 
           <Route path="/admin" element={
-            <PrivateRoute>
+            <PrivateRoute adminOnly={true}> {/* Assuming PrivateRoute can take adminOnly */}
               <AdminDashboard />
+            </PrivateRoute>
+          } />
+          <Route path="/admin/withdrawals" element={
+            <PrivateRoute adminOnly={true}> {/* Assuming PrivateRoute can take adminOnly */}
+              <AdminWithdrawalsPage />
             </PrivateRoute>
           } />
           

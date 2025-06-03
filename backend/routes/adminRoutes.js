@@ -41,4 +41,8 @@ router.get('/tickets', isAuthenticated, isAdmin, adminController.getTickets);
 // Mount report routes
 router.use('/reports', reportRoutes);
 
+// Financials - Withdrawal Requests
+router.get('/financials/withdrawal-requests', isAuthenticated, isAdmin, adminController.getWithdrawalRequests);
+router.put('/financials/withdrawal-requests/:requestId', isAuthenticated, isAdmin, adminController.updateWithdrawalRequestStatus);
+
 module.exports = router;

@@ -1,7 +1,9 @@
-import { FaSearch, FaBell, FaEnvelope } from 'react-icons/fa';
+import { FaSearch, FaBell, FaEnvelope, FaMoneyBillWave } from 'react-icons/fa'; // Added FaMoneyBillWave
 import { useState, useEffect } from 'react';
+import { Link } from 'react-router-dom'; // Import Link
 import { useAuth } from '../../context/AuthContext';
 import api from '../../utils/api';
+import UserBalanceDisplay from '../UserBalanceDisplay'; // Import UserBalanceDisplay
 
 const Navbar = () => {
   const { currentUser } = useAuth();
@@ -43,12 +45,15 @@ const Navbar = () => {
           />
         </div>
 
-        <div className="flex space-x-4">
-          <button className="relative p-2 rounded-full hover:bg-[var(--light)] transition-colors">
+        <div className="flex space-x-4 items-center"> {/* Added items-center */}
+          <Link to="/withdrawals" className="relative p-2 rounded-full hover:bg-[var(--light)] transition-colors" title="Withdrawals">
+            <FaMoneyBillWave className="text-xl text-green-600" />
+          </Link>
+          <button className="relative p-2 rounded-full hover:bg-[var(--light)] transition-colors" title="Notifications">
             <FaBell className="text-xl text-gray-600" />
             <span className="absolute top-1 right-1 w-2 h-2 bg-[var(--primary)] rounded-full"></span>
           </button>
-          <button className="relative p-2 rounded-full hover:bg-[var(--light)] transition-colors">
+          <button className="relative p-2 rounded-full hover:bg-[var(--light)] transition-colors" title="Messages">
             <FaEnvelope className="text-xl text-gray-600" />
             <span className="absolute top-1 right-1 w-2 h-2 bg-[var(--primary)] rounded-full"></span>
           </button>
@@ -62,7 +67,8 @@ const Navbar = () => {
             <p className="font-medium text-sm">
               {profile ? `${profile.first_name} ${profile.last_name}` : 'Loading...'}
             </p>
-            <p className="text-xs text-gray-500">Member</p>
+            {/* <p className="text-xs text-gray-500">Member</p> */}
+            <UserBalanceDisplay className="text-xs text-gray-500" />
           </div>
         </div>
       </div>

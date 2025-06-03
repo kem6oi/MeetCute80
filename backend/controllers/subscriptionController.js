@@ -1,4 +1,6 @@
 const Subscription = require('../models/Subscription');
+const UserBalance = require('../models/UserBalance'); // Added UserBalance
+const pool = require('../config/db'); // Added pool for transaction client
 const env = require('../config/env');
 
 const subscriptionController = {
@@ -146,7 +148,69 @@ const subscriptionController = {
     // ... (original implementation commented out) ...
     return res.status(410).json({ message: 'This endpoint is deprecated. Please use the new transaction flow for new packages.' });
   }
-  */
+  */,
+
+  purchaseWithBalance: async (req, res) => {
+    const { packageId } = req.body;
+    const userId = req.user.id;
+    const client = await pool.connect();
+
+    try {
+      await client.query('BEGIN');
+
+      // 1. Fetch package details
+      const pkg = await Subscription.getPackageById(packageId); // Using existing method, assumes it doesn't need client
+      if (!pkg) {
+        await client.query('ROLLBACK'); // Ensure rollback if package not found early
+        client.release();
+        return res.status(404).json({ error: 'Subscription package not found.' });
+      }
+      const packagePrice = parseFloat(pkg.price);
+
+      // 2. Debit user's balance
+      await UserBalance.debit(userId, packagePrice, client);
+
+      // 3. Create a transaction record
+      const transactionResult = await client.query(
+        `INSERT INTO transactions (user_id, type, amount, status, item_category, payable_item_id, payment_method_details)
+         VALUES ($1, $2, $3, 'completed', 'subscription', $4, $5) RETURNING id`,
+        [userId, 'subscription_site_balance', packagePrice, packageId, 'Paid with site balance']
+      );
+      const newTransactionId = transactionResult.rows[0].id;
+
+      // 4. Activate subscription using the internal workflow
+      // This method handles deactivating old subscriptions and setting user role
+      await Subscription._activateSubscriptionWorkflow(client, {
+        userId,
+        packageId,
+        originalTransactionId: newTransactionId,
+        paymentMethodNameForLog: 'Site Balance'
+      });
+
+      await client.query('COMMIT');
+
+      // Fetch the newly activated subscription details to return
+      const newSubscriptionDetails = await Subscription.getUserSubscription(userId); // This fetches the active one
+
+      res.status(200).json({
+        message: 'Subscription purchased successfully with site balance.',
+        subscription: newSubscriptionDetails
+      });
+
+    } catch (error) {
+      await client.query('ROLLBACK');
+      console.error('Error purchasing subscription with balance:', error.message, error.stack);
+      if (error.message.includes('Insufficient balance')) {
+        return res.status(400).json({ error: error.message });
+      }
+      if (error.message.includes('Package with ID') && error.message.includes('not found')) {
+        return res.status(404).json({ error: error.message }); // From _activateSubscriptionWorkflow if somehow fails there
+      }
+      res.status(500).json({ error: 'Failed to purchase subscription with balance.' });
+    } finally {
+      client.release();
+    }
+  }
 };
 
 module.exports = subscriptionController; 

@@ -1,10 +1,12 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react'; // Added useCallback
 import { useParams, useNavigate, Link } from 'react-router-dom';
 import { useSubscription } from '../context/SubscriptionContext';
 import { useAuth } from '../context/AuthContext';
-import api from '../utils/api'; // Ensure api utility is imported
+import api from '../utils/api';
+import UserBalanceDisplay, { balanceEventEmitter } from '../components/UserBalanceDisplay'; // Import balance components
+import { FaWallet } from 'react-icons/fa'; // For Buy with Balance button
 
-// import { CardElement, useStripe, useElements } from '@stripe/react-stripe-js'; // Conceptual import - Stripe removed
+// import { CardElement, useStripe, useElements } from '@stripe/react-stripe-js';
 
 const ConfirmSubscriptionPage = () => {
   const { packageId } = useParams();
@@ -14,7 +16,8 @@ const ConfirmSubscriptionPage = () => {
 
   const [selectedPackage, setSelectedPackage] = useState(null);
   const [isLoadingPackage, setIsLoadingPackage] = useState(true);
-  const [isProcessing, setIsProcessing] = useState(false); // Used for overall form submission
+  const [isProcessing, setIsProcessing] = useState(false); // Used for manual payment form submission
+  const [isProcessingBalancePurchase, setIsProcessingBalancePurchase] = useState(false); // For balance purchase
   const [error, setError] = useState(null); // General errors
   const [actionType, setActionType] = useState('Subscribe');
   const [gainedFeatures, setGainedFeatures] = useState([]);
@@ -27,15 +30,41 @@ const ConfirmSubscriptionPage = () => {
   const [countryError, setCountryError] = useState(null);
 
   const [paymentMethods, setPaymentMethods] = useState([]);
-  const [selectedPaymentMethodConfig, setSelectedPaymentMethodConfig] = useState(null); // Stores the whole selected payment method object
+  const [selectedPaymentMethodConfig, setSelectedPaymentMethodConfig] = useState(null);
   const [isLoadingPaymentMethods, setIsLoadingPaymentMethods] = useState(false);
   const [paymentMethodError, setPaymentMethodError] = useState(null);
 
-  const [initiatedTransaction, setInitiatedTransaction] = useState(null); // Stores response from transaction initiation
-  const [paymentReference, setPaymentReference] = useState(''); // For user input for payment reference
+  const [initiatedTransaction, setInitiatedTransaction] = useState(null);
+  const [paymentReference, setPaymentReference] = useState('');
+
+  // For site balance purchase
+  const [currentBalance, setCurrentBalance] = useState(null);
+  const [canUseBalance, setCanUseBalance] = useState(false);
 
 
-  // Fetch package details (existing useEffect)
+  const fetchCurrentBalance = useCallback(async () => {
+    try {
+      const response = await api.get('/api/balance');
+      const balanceValue = parseFloat(response.data.balance);
+      setCurrentBalance(balanceValue);
+      if (selectedPackage && balanceValue >= parseFloat(selectedPackage.price)) {
+        setCanUseBalance(true);
+      } else {
+        setCanUseBalance(false);
+      }
+    } catch (err) {
+      console.error("Error fetching current balance:", err);
+      // Not critical for page load if UserBalanceDisplay handles its own display
+    }
+  }, [selectedPackage]); // Re-check if balance is sufficient when selectedPackage changes
+
+  useEffect(() => {
+    fetchCurrentBalance();
+    const unsubscribe = balanceEventEmitter.subscribe(fetchCurrentBalance);
+    return unsubscribe;
+  }, [fetchCurrentBalance]);
+
+  // Fetch package details
   useEffect(() => {
     const loadPackageDetails = async () => {
       if (!packageId) {
@@ -57,7 +86,18 @@ const ConfirmSubscriptionPage = () => {
     loadPackageDetails();
   }, [packageId]);
 
-  // Determine Action Type (existing useEffect)
+  // Update canUseBalance when selectedPackage or currentBalance changes
+   useEffect(() => {
+    if (selectedPackage && currentBalance !== null) {
+      if (parseFloat(currentBalance) >= parseFloat(selectedPackage.price)) {
+        setCanUseBalance(true);
+      } else {
+        setCanUseBalance(false);
+      }
+    }
+  }, [selectedPackage, currentBalance]);
+
+  // Determine Action Type
   useEffect(() => {
     if (currentSubscription && selectedPackage) {
       if (currentSubscription.status === 'active') {
@@ -66,14 +106,14 @@ const ConfirmSubscriptionPage = () => {
         } else if (parseFloat(selectedPackage.price) < parseFloat(currentSubscription.price)) {
           setActionType('Downgrade');
         } else if (selectedPackage.id !== currentSubscription.package_id) {
-          setActionType('Switch Plan');
+          setActionType('Switch Plan'); // Same price, different package
         } else {
-          setActionType('Re-subscribe');
+          setActionType('Re-subscribe'); // Same package, but not active (e.g. cancelled)
         }
-      } else {
+      } else { // No active current subscription
         setActionType('Subscribe');
       }
-    } else {
+    } else if (selectedPackage) { // No current subscription, but have a selected package
         setActionType('Subscribe');
     }
   }, [currentSubscription, selectedPackage]);
@@ -217,6 +257,35 @@ const ConfirmSubscriptionPage = () => {
       }
   };
 
+  const handlePurchaseWithBalance = async () => {
+    if (!selectedPackage || !canUseBalance) {
+      setError("Cannot purchase with site balance at this moment.");
+      return;
+    }
+    setIsProcessingBalancePurchase(true);
+    setError(null);
+    try {
+      const response = await api.post('/api/subscriptions/purchase-with-balance', { packageId: selectedPackage.id });
+      await fetchSubscription(); // Refresh global subscription state
+      balanceEventEmitter.emit(); // Refresh global balance display
+
+      navigate('/subscription/confirmation', { // Navigate to a generic confirmation page
+        replace: true, // Replace current history entry
+        state: {
+          message: response.data.message || "Subscription successful!",
+          type: 'success',
+          packageName: selectedPackage.name,
+          packagePrice: selectedPackage.price
+        }
+      });
+    } catch (err) {
+      console.error('Error purchasing with balance:', err);
+      setError(err.response?.data?.error || 'Failed to purchase subscription with site balance.');
+    } finally {
+      setIsProcessingBalancePurchase(false);
+    }
+  };
+
   const getActionVerb = () => {
     if (actionType === 'Switch Plan') return 'Switch to';
     return actionType;
@@ -245,7 +314,10 @@ const ConfirmSubscriptionPage = () => {
             Confirm your plan details and payment method.
           </p>
 
-          {/* Package Details (existing) */}
+          {/* Error display at the top */}
+          {error && <p className="text-red-400 text-sm mb-4 p-3 bg-red-900/20 rounded-md text-center">{error}</p>}
+
+          {/* Package Details */}
           <div className="bg-slate-700 p-6 rounded-lg mb-6">
             <h3 className="text-xl font-semibold mb-3">{selectedPackage.tier_level} Tier Features:</h3>
             <ul className="list-disc list-inside space-y-1 text-slate-300 mb-4">
@@ -308,10 +380,38 @@ const ConfirmSubscriptionPage = () => {
             </div>
           )}
 
-          {/* Country Selector */}
+          {/* Balance Payment Option */}
+          <div className="mb-6 p-4 bg-slate-700/50 rounded-lg">
+            <p className="text-lg font-semibold mb-2">Your Site Balance</p>
+            <UserBalanceDisplay className="text-xl mb-3" />
+            {canUseBalance && (
+              <button
+                onClick={handlePurchaseWithBalance}
+                disabled={isProcessingBalancePurchase || isProcessing}
+                className="w-full bg-green-600 hover:bg-green-700 text-white font-semibold py-3 px-4 rounded-md transition duration-150 ease-in-out disabled:opacity-50 flex items-center justify-center"
+              >
+                <FaWallet className="mr-2" />
+                {isProcessingBalancePurchase ? 'Processing...' : `Use Balance to ${getActionVerb()} ($${selectedPackage.price})`}
+              </button>
+            )}
+            {!canUseBalance && currentBalance !== null && (
+              <p className="text-sm text-yellow-400">
+                Your balance is insufficient for this package. Please use another payment method.
+              </p>
+            )}
+          </div>
+
+          {/* Divider */}
+          <div className="my-8 flex items-center">
+            <hr className="flex-grow border-slate-600" />
+            <span className="px-3 text-slate-400 text-sm">OR PAY WITH</span>
+            <hr className="flex-grow border-slate-600" />
+          </div>
+
+          {/* Manual Payment Flow (Country Selector etc.) */}
           <div className="mb-6">
             <label htmlFor="country-select" className="block text-sm font-medium text-slate-300 mb-2">
-              Select your country for payment:
+              Select your country for other payment methods:
             </label>
             <select
               id="country-select"

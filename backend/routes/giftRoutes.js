@@ -15,5 +15,6 @@ router.get('/received', isAuthenticated, isUser, giftController.getReceivedGifts
 router.get('/sent', isAuthenticated, isUser, giftController.getSentGifts); // Added isUser
 router.put('/read/:id', isAuthenticated, isUser, giftController.markGiftAsRead); // Added isUser
 router.get('/unread-count', isAuthenticated, isUser, giftController.getUnreadGiftCount); // Added isUser
+router.post('/received/:userGiftId/redeem', isAuthenticated, isUser, giftController.redeemReceivedGift);
 
 module.exports = router; 

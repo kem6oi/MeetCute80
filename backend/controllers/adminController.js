@@ -2,6 +2,7 @@ const pool = require('../config/db');
 const { insertAdminLog } = require('../utils/adminLogger');
 const PaymentMethod = require('../models/PaymentMethod');
 const Transaction = require('../models/Transaction'); // Added Transaction model import
+const WithdrawalRequest = require('../models/WithdrawalRequest'); // Added WithdrawalRequest model
 
 exports.getDashboardStats = async (req, res) => {
   const client = await pool.connect();
@@ -992,5 +993,60 @@ exports.verifyTransactionStatus = async (req, res) => {
         return res.status(500).json({ message: 'Transaction status updated, but an error occurred during service fulfillment. Please review manually.', error: error.message });
     }
     res.status(500).json({ message: 'Failed to verify transaction status', error: error.message });
+  }
+};
+
+// Withdrawal Management
+exports.getWithdrawalRequests = async (req, res) => {
+  try {
+      const { status } = req.query;
+      let requests;
+      if (status) {
+          requests = await WithdrawalRequest.getByStatus(status);
+      } else {
+          requests = await WithdrawalRequest.getAll();
+      }
+      res.json(requests);
+  } catch (error) {
+      console.error('Admin: Error fetching withdrawal requests:', error.message, error.stack);
+      res.status(500).json({ error: 'Failed to fetch withdrawal requests.' });
+  }
+};
+
+exports.updateWithdrawalRequestStatus = async (req, res) => {
+  try {
+      const { requestId } = req.params;
+      const { status, adminNotes } = req.body; // status: 'approved', 'processed', 'declined'
+      const adminId = req.user.id;
+
+      if (!status || !['approved', 'processed', 'declined'].includes(status)) {
+          return res.status(400).json({ error: 'Invalid status provided. Must be one of: approved, processed, declined.' });
+      }
+
+      const updatedRequest = await WithdrawalRequest.updateStatus({
+          requestId: parseInt(requestId),
+          newStatus: status,
+          adminId,
+          adminNotes
+      });
+
+      // Log admin action
+      await insertAdminLog({
+        adminId,
+        action: 'UPDATE_WITHDRAWAL_STATUS',
+        targetUserId: updatedRequest.user_id, // Assuming updatedRequest contains user_id
+        details: `Withdrawal request ID ${updatedRequest.id} status updated to ${status}. Notes: ${adminNotes || ''}`
+      });
+
+      res.json({ message: 'Withdrawal request status updated.', request: updatedRequest });
+  } catch (error) {
+      console.error('Admin: Error updating withdrawal request status:', error.message, error.stack);
+       if (error.message.includes('not found')) {
+          return res.status(404).json({ error: error.message });
+      }
+      if (error.message.includes('Insufficient balance')) { // Should only occur if refund fails
+          return res.status(500).json({ error: `Balance update failed during status change: ${error.message}`});
+      }
+      res.status(500).json({ error: 'Failed to update withdrawal request status.' });
   }
 };
