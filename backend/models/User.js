@@ -1,11 +1,11 @@
 const pool = require('../config/db');
 
 class User {
-  static async create({ email, password, role = 'user', phone = null, country_id = null }) {
+  static async create({ email, password, role = 'user', phone = null, country_id = null, email_verification_token }) {
     const result = await pool.query(
-      `INSERT INTO users (email, password, role, phone, country_id) 
-       VALUES ($1, $2, $3, $4, $5) RETURNING *`,
-      [email, password, role, phone, country_id]
+      `INSERT INTO users (email, password, role, phone, country_id, is_email_verified, email_verification_token)
+       VALUES ($1, $2, $3, $4, $5, FALSE, $6) RETURNING *`,
+      [email, password, role, phone, country_id, email_verification_token]
     );
     return result.rows[0];
   }
@@ -16,6 +16,21 @@ class User {
       [email]
     );
     return result.rows[0];
+  }
+
+  static async findByVerificationToken(token) {
+    const result = await pool.query(
+      'SELECT * FROM users WHERE email_verification_token = $1',
+      [token]
+    );
+    return result.rows[0];
+  }
+
+  static async verifyEmail(userId) {
+    await pool.query(
+      'UPDATE users SET is_email_verified = TRUE, email_verification_token = NULL WHERE id = $1',
+      [userId]
+    );
   }
 
   static async findById(id) {

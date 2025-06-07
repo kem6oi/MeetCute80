@@ -48,7 +48,13 @@ exports.sendMessage = async (req, res) => {
     
     res.json(message);
   } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: 'Failed to send message' });
+    console.error('Error sending message:', err.message); // Log the actual error message
+    // Check for PostgreSQL RAISE EXCEPTION for message limits
+    // PostgreSQL error code for 'raise_exception' is 'P0001'
+    if (err.code === 'P0001' && err.message.includes('Daily message limit reached')) {
+      res.status(429).json({ error: 'Daily message limit reached. Upgrade to send more messages.' });
+    } else {
+      res.status(500).json({ error: 'Failed to send message' });
+    }
   }
 };

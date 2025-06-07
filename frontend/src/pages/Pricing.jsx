@@ -1,169 +1,254 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { FaCheck, FaCrown } from 'react-icons/fa';
-import axios from 'axios';
-import { loadStripe } from '@stripe/stripe-js';
+import { FaCheck, FaTimes, FaCrown } from 'react-icons/fa'; // FaTimes for '✘'
+import api from '../utils/api'; // Using the global api instance
+import { useAuth } from '../context/AuthContext'; // To potentially pass token if needed by api instance
 
-// Only initialize Stripe if we have a valid key (not just placeholder)
-const stripeKey = import.meta.env.VITE_STRIPE_PUBLIC_KEY || '';
-const isValidStripeKey = stripeKey && stripeKey.startsWith('pk_') && stripeKey.length > 10;
-
-// Initialize Stripe only if we have a valid key
-let stripePromise = null;
-if (isValidStripeKey) {
-  try {
-    stripePromise = loadStripe(stripeKey);
-  } catch (err) {
-    console.error('Error initializing Stripe:', err);
-  }
-}
-
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000';
+// Stripe is not directly used in this display component for payment processing initiation here
+// but kept if handleSubscribe was to be more complex later.
+// For now, handleSubscribe will just navigate or call a context method.
 
 const Pricing = () => {
-  const [packages, setPackages] = useState([]);
-  const [selectedPackage, setSelectedPackage] = useState(null);
+  const [rawPackages, setRawPackages] = useState([]);
+  const [displayTiers, setDisplayTiers] = useState({}); // { Basic: pkg, Premium: pkg, Elite: pkg }
+  const [allUniqueFeatures, setAllUniqueFeatures] = useState([]); // [{name, description}, ...]
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const navigate = useNavigate();
+  const { authState } = useAuth();
 
   useEffect(() => {
-    fetchPackages();
+    const fetchPackagesData = async () => {
+      setLoading(true);
+      setError(null);
+      try {
+        const response = await api.get('/subscription/packages'); // Using global api
+        const fetchedPackages = response.data || [];
+        setRawPackages(fetchedPackages);
+
+        // Process packages for display
+        const tiers = {};
+        const featuresMap = new Map();
+
+        fetchedPackages.forEach(pkg => {
+          if (!pkg.tier_level) return; // Skip packages without a tier_level
+
+          // Prioritize monthly packages for display in the main column for a tier
+          // Or just take the first one if no monthly/annual distinction is made or needed for features
+          if (!tiers[pkg.tier_level] || pkg.billing_interval === 'monthly') {
+            tiers[pkg.tier_level] = {
+              ...pkg, // Includes id, name, price, billing_interval, tier_level, description, duration_months
+              // features array is already on pkg from backend
+            };
+          }
+
+          pkg.features.forEach(feature => {
+            if (!featuresMap.has(feature.name)) {
+              featuresMap.set(feature.name, feature.description || 'No description available.');
+            }
+          });
+        });
+
+        // Ensure specific order: Basic, Premium, Elite
+        const orderedTiers = {};
+        if (tiers.Basic) orderedTiers.Basic = tiers.Basic;
+        if (tiers.Premium) orderedTiers.Premium = tiers.Premium;
+        if (tiers.Elite) orderedTiers.Elite = tiers.Elite;
+        // Add any other tiers that might exist, though the design implies these three
+        Object.keys(tiers).forEach(tierKey => {
+            if (!orderedTiers[tierKey]) orderedTiers[tierKey] = tiers[tierKey];
+        });
+
+
+        setDisplayTiers(orderedTiers);
+        setAllUniqueFeatures(Array.from(featuresMap, ([name, description]) => ({ name, description })));
+
+      } catch (err) {
+        console.error('Error fetching packages:', err);
+        setError(err.response?.data?.message || 'Failed to load subscription packages');
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    fetchPackagesData();
   }, []);
 
-  const fetchPackages = async () => {
-    try {
-      const response = await axios.get(`${API_URL}/api/subscription/packages`);
-      setPackages(response.data);
-      setLoading(false);
-    } catch (err) {
-      console.error('Error fetching packages:', err);
-      setError('Failed to load subscription packages');
-      setLoading(false);
+  const handleChoosePlan = (packageId) => {
+    // For V1, this might navigate to a dedicated subscription page or trigger a modal.
+    // The actual subscription creation with Stripe Elements would be on that page/modal.
+    // This simplifies Pricing.jsx to be mostly display.
+    // If user is not authenticated, redirect to login/register first.
+    if (!authState.isAuthenticated) {
+      navigate('/login', { state: { from: '/pricing', packageId } });
+    } else {
+      // User is authenticated, proceed to a checkout or confirmation step
+      // For now, let's assume there's a /subscribe page that takes packageId
+      navigate(`/subscribe/${packageId}`);
+      // Or directly call a subscription creation function if using a modal here
+      console.log(`User chose package ID: ${packageId}`);
     }
   };
 
-  const handleSubscribe = async (packageId) => {
-    try {
-      if (!stripePromise) {
-        setError('Payment system is not configured');
-        return;
+  const tierOrder = ['Basic', 'Premium', 'Elite'];
+
+  const orderedDisplayTiers = useMemo(() => {
+    const result = [];
+    for (const tierName of tierOrder) {
+      if (displayTiers[tierName]) {
+        result.push(displayTiers[tierName]);
       }
-
-      const stripe = await stripePromise;
-      
-      // Create payment method
-      const { paymentMethod } = await stripe.createPaymentMethod({
-        type: 'card',
-        card: {
-          number: '4242424242424242', // Test card number
-          exp_month: 12,
-          exp_year: 2024,
-          cvc: '123',
-        },
-      });
-
-      // Create subscription
-      const response = await axios.post(`${API_URL}/api/subscription/subscribe`, {
-        packageId,
-        paymentMethodId: paymentMethod.id
-      });
-
-      if (response.data.subscription) {
-        navigate('/subscription/confirmation', {
-          state: { subscription: response.data.subscription }
-        });
-      }
-    } catch (err) {
-      setError(err.response?.data?.message || 'Failed to process subscription');
     }
-  };
+    // Add any other tiers not in the predefined order (though typically there'd be only these)
+    for (const tier of Object.values(displayTiers)) {
+        if (!result.some(t => t.tier_level === tier.tier_level)) {
+            result.push(tier);
+        }
+    }
+    return result;
+  }, [displayTiers]);
+
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center h-full">
-        <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-[var(--primary)]"></div>
+      <div className="flex items-center justify-center min-h-screen bg-gray-100">
+        <div className="animate-spin rounded-full h-16 w-16 border-t-4 border-b-4 border-blue-500"></div>
       </div>
     );
   }
 
   if (error) {
     return (
-      <div className="flex items-center justify-center h-full">
-        <div className="text-red-500">{error}</div>
+      <div className="flex items-center justify-center min-h-screen bg-gray-100">
+        <div className="text-red-600 p-8 bg-white shadow-lg rounded-lg text-center">
+          <h2 className="text-2xl font-semibold mb-4">Error Loading Packages</h2>
+          <p>{error}</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (orderedDisplayTiers.length === 0 && !loading) { // Added !loading to prevent flash of this message
+    return (
+      <div className="flex items-center justify-center min-h-screen bg-gray-100">
+        <div className="text-gray-600 p-8 bg-white shadow-lg rounded-lg text-center">
+          <h2 className="text-2xl font-semibold mb-4">No Subscription Packages Available</h2>
+          <p>Please check back later or contact support.</p>
+        </div>
       </div>
     );
   }
 
   return (
-    <div className="py-8">
-      <div className="max-w-7xl mx-auto">
-        <div className="text-center">
-          <h1 className="text-4xl font-bold text-[var(--primary)] mb-4">
-            Choose Your Perfect Plan
+    <div className="py-12 bg-gradient-to-br from-slate-900 to-slate-800 min-h-screen text-white">
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+        <div className="text-center mb-16">
+          <h1 className="text-5xl font-extrabold mb-4 tracking-tight">
+            Find Your Perfect Match, Faster.
           </h1>
-          <p className="text-lg text-[var(--text)] mb-12">
-            Unlock premium features and enhance your dating experience
+          <p className="text-xl text-slate-400 max-w-2xl mx-auto">
+            Choose a plan that suits your journey. Unlock exclusive features and connect on a deeper level.
           </p>
         </div>
 
-        <div className="grid md:grid-cols-3 gap-8">
-          {packages.map((pkg) => (
-            <div
-              key={pkg.id}
-              className={`relative rounded-2xl shadow-xl overflow-hidden transition-transform hover:scale-105 ${
-                pkg.name === 'Premium' ? 'border-2 border-[var(--primary)]' : 'border border-gray-200'
-              }`}
-            >
-              {pkg.name === 'Premium' && (
-                <div className="absolute top-0 right-0 bg-[var(--primary)] text-white px-4 py-1 rounded-bl-lg">
-                  Popular
-                </div>
-              )}
-
-              <div className="p-8 bg-white">
-                <div className="flex items-center justify-center mb-4">
-                  <FaCrown className={`text-4xl ${
-                    pkg.name === 'VIP' ? 'text-[var(--primary-dark)]' :
-                    pkg.name === 'Premium' ? 'text-[var(--primary)]' :
-                    'text-[var(--primary-light)]'
-                  }`} />
-                </div>
-
-                <h2 className="text-2xl font-bold text-center mb-2">{pkg.name}</h2>
-                <div className="text-center mb-6">
-                  <span className="text-4xl font-bold">${pkg.price}</span>
-                  <span className="text-[var(--text-light)]">/month</span>
-                </div>
-
-                <ul className="space-y-4 mb-8">
-                  {pkg.features.map((feature) => (
-                    <li key={feature.id} className="flex items-start">
-                      <FaCheck className="text-green-500 mt-1 mr-2" />
-                      <span className="text-[var(--text)]">{feature.name}</span>
-                    </li>
-                  ))}
-                </ul>
-
-                <button
-                  onClick={() => handleSubscribe(pkg.id)}
-                  className={`w-full py-3 px-6 rounded-full font-medium transition-colors ${
-                    pkg.name === 'VIP'
-                      ? 'bg-gradient-to-r from-[var(--primary-dark)] to-[var(--primary)] text-white hover:opacity-90'
-                      : pkg.name === 'Premium'
-                      ? 'bg-[var(--primary)] text-white hover:bg-[var(--primary-dark)]'
-                      : 'bg-[var(--light)] text-[var(--primary)] hover:bg-[var(--primary-light)]'
-                  }`}
-                >
-                  Get Started
-                </button>
-              </div>
-            </div>
-          ))}
+        <div className="overflow-x-auto bg-slate-800 shadow-2xl rounded-xl p-px">
+          <table className="min-w-full divide-y divide-slate-700">
+            <thead className="bg-slate-700/50">
+              <tr>
+                <th scope="col" className="py-5 px-6 text-left text-xs font-medium uppercase tracking-wider w-1/3">
+                  Features
+                </th>
+                {orderedDisplayTiers.map((pkg) => (
+                  <th key={pkg.tier_level} scope="col" className="py-5 px-6 text-center text-xs font-medium uppercase tracking-wider relative w-1/4">
+                    <div className="flex flex-col items-center">
+                        {pkg.tier_level === 'Premium' && (
+                        <span className="absolute -top-3 bg-indigo-500 text-white text-xs font-semibold px-3 py-1 rounded-full shadow-md">
+                            Most Popular
+                        </span>
+                        )}
+                        <FaCrown className={`text-3xl mb-2 ${
+                            pkg.tier_level === 'Elite' ? 'text-yellow-400' :
+                            pkg.tier_level === 'Premium' ? 'text-indigo-400' :
+                            'text-slate-400'
+                        }`} />
+                        <span className="text-lg font-semibold">{pkg.tier_level}</span>
+                    </div>
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-700">
+              {allUniqueFeatures.map((feature, featureIdx) => (
+                <tr key={feature.name} className={featureIdx % 2 === 0 ? 'bg-slate-800' : 'bg-slate-800/50'}>
+                  <td
+                    className="py-4 px-6 text-sm font-medium text-slate-300 whitespace-nowrap"
+                    title={feature.description} // Tooltip for feature description
+                  >
+                    {feature.name}
+                  </td>
+                  {orderedDisplayTiers.map((pkg) => {
+                    const hasFeature = pkg.features.some(f => f.name === feature.name);
+                    return (
+                      <td key={`${pkg.tier_level}-${feature.name}`} className="py-4 px-6 text-center whitespace-nowrap">
+                        {hasFeature ? (
+                          <FaCheck className="text-green-400 mx-auto text-xl" />
+                        ) : (
+                          <FaTimes className="text-slate-500 mx-auto text-xl" />
+                        )}
+                      </td>
+                    );
+                  })}
+                </tr>
+              ))}
+              {/* Price Row */}
+              <tr className="bg-slate-800/50">
+                <td className="py-5 px-6 text-sm font-semibold text-slate-300">Price</td>
+                {orderedDisplayTiers.map(pkg => (
+                  <td key={`${pkg.tier_level}-price`} className="py-5 px-6 text-center">
+                    <span className="text-3xl font-extrabold">${pkg.price}</span>
+                    <span className="text-sm text-slate-400">/{pkg.billing_interval === 'monthly' ? 'mo' : pkg.billing_interval}</span>
+                  </td>
+                ))}
+              </tr>
+              {/* Duration Row (if applicable) */}
+              <tr className="bg-slate-800">
+                <td className="py-3 px-6 text-sm font-medium text-slate-300">Billed</td>
+                {orderedDisplayTiers.map(pkg => (
+                  <td key={`${pkg.tier_level}-duration`} className="py-3 px-6 text-center text-sm text-slate-400">
+                    {pkg.duration_months ? `${pkg.duration_months} month${pkg.duration_months > 1 ? 's' : ''}` : pkg.billing_interval}
+                  </td>
+                ))}
+              </tr>
+              {/* Subscribe Button Row */}
+              <tr className="bg-slate-800/50">
+                <td className="py-6 px-6"></td>
+                {orderedDisplayTiers.map(pkg => (
+                  <td key={`${pkg.tier_level}-action`} className="py-6 px-6 text-center">
+                    <button
+                      onClick={() => handleChoosePlan(pkg.id)}
+                      className={`w-full max-w-xs mx-auto py-3 px-4 rounded-lg font-semibold text-sm transition-all duration-150 ease-in-out shadow-md hover:shadow-lg focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-slate-800 ${
+                        pkg.tier_level === 'Premium'
+                        ? 'bg-indigo-500 hover:bg-indigo-400 text-white focus:ring-indigo-500'
+                        : pkg.tier_level === 'Elite'
+                        ? 'bg-yellow-500 hover:bg-yellow-400 text-slate-900 focus:ring-yellow-500'
+                        : 'bg-slate-600 hover:bg-slate-500 text-white focus:ring-slate-500'
+                      }`}
+                    >
+                      Choose {pkg.tier_level}
+                    </button>
+                  </td>
+                ))}
+              </tr>
+            </tbody>
+          </table>
+        </div>
+         <div className="text-center mt-12 text-sm text-slate-500">
+            <p>Prices and features are subject to change. Subscriptions auto-renew unless cancelled.</p>
+            <p>For more details, please review our Terms of Service.</p>
         </div>
       </div>
     </div>
   );
 };
 
-export default Pricing; 
+export default Pricing;

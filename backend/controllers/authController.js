@@ -1,5 +1,6 @@
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
+const crypto = require('crypto');
 const User = require('../models/User');
 const Profile = require('../models/Profile');
 const env = require('../config/env');
@@ -22,23 +23,22 @@ exports.register = async (req, res) => {
     const salt = await bcrypt.genSalt(10);
     const hashedPassword = await bcrypt.hash(password, salt);
 
+    // Generate email verification token
+    const email_verification_token = crypto.randomBytes(32).toString('hex');
+
     // Create user
     const user = await User.create({ 
       email, 
       password: hashedPassword, 
       role: role || 'user',
       phone: phone || null,
-      country_id: countryId || null
+      country_id: countryId || null,
+      email_verification_token
     });
 
-    // Generate token
-    const token = jwt.sign(
-      { id: user.id, role: user.role },
-      env.JWT_SECRET,
-      { expiresIn: '7d' }
-    );
+    // TODO: Send verification email to user.email with token
 
-    res.status(201).json({ token });
+    res.status(201).json({ message: "Registration successful. Please check your email to verify your account." });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Registration failed' });
@@ -56,6 +56,14 @@ exports.login = async (req, res) => {
     const user = await User.findByEmail(email);
     if (!user) {
       return res.status(400).json({ error: 'Invalid credentials' });
+    }
+
+    // Check if email is verified
+    if (!user.is_email_verified) {
+      return res.status(403).json({
+        error: "Email not verified. Please check your inbox for a verification link.",
+        status: "email_unverified"
+      });
     }
 
     // Check if user is suspended
@@ -88,5 +96,28 @@ exports.login = async (req, res) => {
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Login failed' });
+  }
+};
+
+exports.verifyEmail = async (req, res) => {
+  try {
+    const { token } = req.query;
+
+    if (!token) {
+      return res.status(400).json({ error: 'Verification token is required' });
+    }
+
+    const user = await User.findByVerificationToken(token);
+
+    if (!user) {
+      return res.status(400).json({ error: 'Invalid or expired token' });
+    }
+
+    await User.verifyEmail(user.id);
+
+    res.json({ message: "Email verified successfully. You can now log in." });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Email verification failed' });
   }
 };

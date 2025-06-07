@@ -30,7 +30,6 @@ MeetCute is a full-featured dating application designed to create meaningful con
 - **Tailwind CSS**: Utility-first CSS framework
 - **React Icons**: Icon library
 - **Socket.io Client**: Real-time communication
-- **Stripe.js**: Payment processing integration
 
 ### Backend
 - **Node.js**: JavaScript runtime
@@ -39,7 +38,6 @@ MeetCute is a full-featured dating application designed to create meaningful con
 - **WebSockets**: Real-time communication
 - **JWT**: Authentication via JSON Web Tokens
 - **Bcrypt**: Password hashing
-- **Stripe API**: Payment processing
 - **Nodemailer**: Email notifications
 
 ## 🗂️ Project Structure
@@ -124,7 +122,6 @@ MeetCute uses a PostgreSQL database with the following core tables:
    DB_PASSWORD=yourpassword
    DB_NAME=meetcute
    JWT_SECRET=your-jwt-secret
-   STRIPE_SECRET_KEY=your-stripe-secret-key
    FRONTEND_URL=http://localhost:5173
    ```
 
@@ -153,7 +150,6 @@ MeetCute uses a PostgreSQL database with the following core tables:
 3. Create a `.env` file:
    ```
    VITE_API_URL=http://localhost:5000
-   VITE_STRIPE_PUBLIC_KEY=your-stripe-public-key
    VITE_SOCKET_URL=http://localhost:5000
    ```
 
@@ -176,7 +172,34 @@ MeetCute offers a tiered subscription model:
 - **Premium**: Enhanced features and visibility
 - **Elite/VIP**: Full access to all platform features
 
-Payment processing is integrated with Stripe for secure transactions.
+Payment processing now supports a variety of country-specific payment methods, including manual verification flows like M-Pesa, bank transfers, PayPal (manual reference), and Bitcoin. Admins configure these methods per country, and users are guided through a process of paying externally and submitting a transaction reference for admin verification.
+
+## 💳 Payment System
+
+The new payment system is designed to be flexible and accommodate various payment methods, particularly those requiring manual verification.
+
+### For Users:
+1.  **Select Country & Method**: When making a payment (e.g., for a subscription), users first select their country. The system then displays available payment methods configured for that country.
+2.  **View Instructions**: Upon selecting a method, users receive specific payment instructions (e.g., M-Pesa PayBill number, bank account details, PayPal email, BTC address).
+3.  **Make Payment Externally**: Users complete the payment using the provided details through their chosen external service (M-Pesa app, bank app, PayPal website, BTC wallet).
+4.  **Submit Reference**: After making the payment, users submit a payment reference (e.g., M-Pesa transaction code, bank transaction ID, PayPal transaction ID, BTC transaction hash) through the MeetCute platform.
+5.  **Await Verification**: The transaction status becomes 'pending_verification'. Admins review these submissions.
+6.  **Confirmation**: Once an admin verifies the payment, the transaction is marked 'completed', and the service (e.g., subscription) is activated. If declined, the transaction is marked 'declined'.
+
+### For Administrators:
+1.  **Global Payment Types**: Admins can define global payment method types (e.g., "M-Pesa", "PayPal", "Bank Transfer", "Bitcoin") with a unique code and description.
+    *   Relevant API: `/api/admin/payment-methods/types`
+2.  **Country-Specific Configuration**: For each country, admins can activate global payment types and provide specific configuration details and user instructions.
+    *   **Examples**:
+        *   For M-Pesa in Kenya: PayBill number, Account number instructions.
+        *   For PayPal (globally or per country): PayPal email address for payments.
+        *   For Bank Transfer in a specific country: Bank name, Account number, Beneficiary, SWIFT/BIC.
+        *   For Bitcoin: BTC wallet address.
+    *   Relevant API: `/api/admin/payment-configurations`
+3.  **Transaction Verification Queue**: Admins have a dashboard to view transactions that are 'pending_verification'. They can review the user-submitted reference, compare it with external payment records (if applicable), and then approve ('completed') or decline the transaction. Admin notes can be added during verification.
+    *   Relevant API: `/api/admin/transactions`
+
+This system allows for a wider range of payment options beyond direct credit card processing, catering to diverse user preferences and regional payment habits.
 
 ## 🔍 Moderation System
 
@@ -193,11 +216,15 @@ The backend exposes the following primary API categories:
 - `/api/user`: User profile management
 - `/api/matches`: Match creation and management
 - `/api/messages`: Messaging functionality
-- `/api/admin`: Admin dashboard operations
-- `/api/subscription`: Subscription management
-- `/api/gifts`: Virtual gift functionality
+- `/api/admin`: Admin dashboard operations (stats, user management, moderation, etc.)
+- `/api/subscription`: Manages subscription lifecycle post-payment verification.
+- `/api/gifts`: Virtual gift functionality (may also integrate with new transaction system).
 - `/api/profile`: Profile management
 - `/api/countries`: Country data for location settings
+- `/api/transactions`: User-facing transaction initiation, reference submission, and status tracking.
+- `/api/admin/payment-methods/types`: Admin management of global payment method types.
+- `/api/admin/payment-configurations`: Admin management of country-specific payment method setups.
+- `/api/admin/transactions`: Admin management and verification of transactions.
 
 ## 📱 Responsive Design
 

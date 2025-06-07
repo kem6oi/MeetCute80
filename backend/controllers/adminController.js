@@ -1,5 +1,8 @@
 const pool = require('../config/db');
 const { insertAdminLog } = require('../utils/adminLogger');
+const PaymentMethod = require('../models/PaymentMethod');
+const Transaction = require('../models/Transaction'); // Added Transaction model import
+const WithdrawalRequest = require('../models/WithdrawalRequest'); // Added WithdrawalRequest model
 
 exports.getDashboardStats = async (req, res) => {
   const client = await pool.connect();
@@ -721,5 +724,329 @@ exports.getAdminLogs = async (req, res) => {
   } catch (err) {
     console.error('Error getting admin logs:', err);
     res.status(500).json({ message: 'Failed to get admin logs' });
+  }
+};
+
+// Payment Method Management
+exports.listGlobalPaymentMethodTypes = async (req, res) => {
+  try {
+    const types = await PaymentMethod.getAllTypes();
+    res.status(200).json(types);
+  } catch (error) {
+    console.error('Error in listGlobalPaymentMethodTypes:', error);
+    res.status(500).json({ message: 'Error listing global payment method types', error: error.message });
+  }
+};
+
+exports.createGlobalPaymentMethodType = async (req, res) => {
+  try {
+    const { name, code, description, isActive } = req.body; // isActive can be part of creation
+
+    if (!name || !code) {
+      return res.status(400).json({ message: 'Name and code are required for payment method type.' });
+    }
+
+    const newType = await PaymentMethod.createType({ name, code, description, isActive });
+    res.status(201).json(newType);
+  } catch (error) {
+    console.error('Error in createGlobalPaymentMethodType:', error);
+    // Check for unique constraint violation (e.g., PostgreSQL error code 23505)
+    if (error.code === '23505' && error.constraint === 'payment_methods_code_key') {
+      return res.status(409).json({ message: `Payment method type with code '${req.body.code.toUpperCase()}' already exists.` });
+    }
+    res.status(500).json({ message: 'Error creating global payment method type', error: error.message });
+  }
+};
+
+exports.listCountryPaymentMethods = async (req, res) => {
+  try {
+    const { countryId } = req.params;
+    if (isNaN(parseInt(countryId))) {
+        return res.status(400).json({ message: 'Invalid country ID.' });
+    }
+    const methods = await PaymentMethod.getCountryPaymentMethods(parseInt(countryId));
+    res.status(200).json(methods);
+  } catch (error) {
+    console.error('Error in listCountryPaymentMethods:', error);
+    res.status(500).json({ message: 'Error listing country payment methods', error: error.message });
+  }
+};
+
+exports.configureCountryPaymentMethod = async (req, res) => {
+  try {
+    const { countryId } = req.params;
+    const cId = parseInt(countryId);
+    const { paymentMethodId, isActive, priority, userInstructions, configurationDetails } = req.body;
+    const pId = parseInt(paymentMethodId);
+
+    if (isNaN(cId)) {
+      return res.status(400).json({ message: 'Invalid country ID.' });
+    }
+    if (isNaN(pId)) {
+      return res.status(400).json({ message: 'PaymentMethodId is required and must be a number.' });
+    }
+    if (configurationDetails !== null && typeof configurationDetails !== 'object') {
+        return res.status(400).json({ message: 'ConfigurationDetails must be an object or null.' });
+    }
+
+    // The model method returns the raw upserted row.
+    // We need to determine if it was a create or update for status code,
+    // or just fetch the full details again.
+    // For simplicity, we'll fetch details after upsert.
+
+    await PaymentMethod.configureCountryPaymentMethod({
+      countryId: cId,
+      paymentMethodId: pId,
+      isActive, // Will default in model if undefined
+      priority, // Will default in model if undefined
+      userInstructions,
+      configurationDetails
+    });
+
+    // Fetch the full details to return in response
+    const configuredMethodDetails = await PaymentMethod.getCountryPaymentMethodDetail(cId, pId);
+
+    if (!configuredMethodDetails) {
+        // This case should ideally not be reached if upsert was successful
+        return res.status(404).json({ message: 'Configured payment method not found after operation.' });
+    }
+
+    // Simple approach: return 200 for success from POST as it's an upsert.
+    // A more complex approach could try to determine if it was a create or update.
+    res.status(200).json(configuredMethodDetails);
+
+  } catch (error) {
+    console.error('Error in configureCountryPaymentMethod:', error);
+    // Handle potential foreign key constraint errors, e.g., if paymentMethodId doesn't exist
+    if (error.code === '23503') { // Foreign key violation
+        return res.status(400).json({ message: 'Invalid paymentMethodId or countryId. Ensure they exist.' });
+    }
+    res.status(500).json({ message: 'Error configuring country payment method', error: error.message });
+  }
+};
+
+exports.getCountryPaymentMethodDetail = async (req, res) => {
+  try {
+    const { countryId, paymentMethodId } = req.params;
+    const cId = parseInt(countryId);
+    const pId = parseInt(paymentMethodId);
+
+    if (isNaN(cId) || isNaN(pId)) {
+      return res.status(400).json({ message: 'Invalid country ID or payment method ID.' });
+    }
+
+    const detail = await PaymentMethod.getCountryPaymentMethodDetail(cId, pId);
+
+    if (!detail) {
+      return res.status(404).json({ message: 'Configured payment method not found for this country.' });
+    }
+    res.status(200).json(detail);
+  } catch (error) {
+    console.error('Error in getCountryPaymentMethodDetail:', error);
+    res.status(500).json({ message: 'Error getting country payment method detail', error: error.message });
+  }
+};
+
+exports.updateCountryPaymentMethodConfiguration = async (req, res) => {
+  try {
+    const { countryId, paymentMethodId } = req.params;
+    const cId = parseInt(countryId);
+    const pId = parseInt(paymentMethodId);
+    const { isActive, priority, userInstructions, configurationDetails } = req.body;
+
+    if (isNaN(cId) || isNaN(pId)) {
+      return res.status(400).json({ message: 'Invalid country ID or payment method ID.' });
+    }
+    if (configurationDetails !== undefined && configurationDetails !== null && typeof configurationDetails !== 'object') {
+        return res.status(400).json({ message: 'ConfigurationDetails must be an object or null if provided.' });
+    }
+
+    // Use the same upsert logic from the model
+    await PaymentMethod.configureCountryPaymentMethod({
+      countryId: cId,
+      paymentMethodId: pId,
+      isActive,
+      priority,
+      userInstructions,
+      configurationDetails
+    });
+
+    const updatedMethodDetails = await PaymentMethod.getCountryPaymentMethodDetail(cId, pId);
+
+    if (!updatedMethodDetails) {
+      // If after upsert, it's still not found, this is an issue (e.g. trying to update a non-existent one without creation)
+      // However, configureCountryPaymentMethod IS an upsert. So this means the method type ID itself might be invalid.
+      return res.status(404).json({ message: 'Configured payment method not found or payment method type is invalid.' });
+    }
+
+    res.status(200).json(updatedMethodDetails);
+
+  } catch (error) {
+    console.error('Error in updateCountryPaymentMethodConfiguration:', error);
+     if (error.code === '23503') { // Foreign key violation
+        return res.status(400).json({ message: 'Invalid paymentMethodId or countryId. Ensure they exist.' });
+    }
+    res.status(500).json({ message: 'Error updating country payment method configuration', error: error.message });
+  }
+};
+
+exports.removeCountryPaymentMethod = async (req, res) => {
+  try {
+    const { countryId, paymentMethodId } = req.params;
+    const cId = parseInt(countryId);
+    const pId = parseInt(paymentMethodId);
+
+    if (isNaN(cId) || isNaN(pId)) {
+      return res.status(400).json({ message: 'Invalid country ID or payment method ID.' });
+    }
+
+    const deletedMethod = await PaymentMethod.removeCountryPaymentMethod(cId, pId);
+
+    if (!deletedMethod) {
+      return res.status(404).json({ message: 'Configured payment method not found for this country to remove.' });
+    }
+
+    // Respond with the deleted record or a success message
+    res.status(200).json({ message: 'Payment method configuration removed successfully.', data: deletedMethod });
+    // Or simply res.status(204).send(); if no content is preferred on delete
+  } catch (error) {
+    console.error('Error in removeCountryPaymentMethod:', error);
+    res.status(500).json({ message: 'Error removing country payment method', error: error.message });
+  }
+};
+
+// Admin Transaction Management
+exports.listPendingVerificationTransactions = async (req, res) => {
+  try {
+    const limit = parseInt(req.query.limit) || 20;
+    const offset = parseInt(req.query.offset) || 0;
+
+    if (isNaN(limit) || isNaN(offset) || limit <= 0 || offset < 0) {
+      return res.status(400).json({ message: 'Invalid limit or offset parameters.' });
+    }
+
+    const result = await Transaction.getPendingVerification(limit, offset);
+    res.status(200).json(result);
+  } catch (error) {
+    console.error('Error listing pending verification transactions:', error);
+    res.status(500).json({ message: 'Failed to list pending verification transactions', error: error.message });
+  }
+};
+
+exports.getAdminTransactionDetails = async (req, res) => {
+  try {
+    const { transactionId } = req.params;
+    const tId = parseInt(transactionId);
+
+    if (isNaN(tId)) {
+      return res.status(400).json({ message: 'Invalid transaction ID.' });
+    }
+
+    const transaction = await Transaction.getById(tId); // Use admin version getById
+
+    if (!transaction) {
+      return res.status(404).json({ message: 'Transaction not found.' });
+    }
+    res.status(200).json(transaction);
+  } catch (error) {
+    console.error('Error getting transaction details for admin:', error);
+    res.status(500).json({ message: 'Failed to get transaction details', error: error.message });
+  }
+};
+
+exports.verifyTransactionStatus = async (req, res) => {
+  try {
+    const { transactionId } = req.params;
+    const adminId = req.user.id; // Assuming admin user ID is available from auth middleware
+    const { newStatus, adminNotes } = req.body;
+
+    const tId = parseInt(transactionId);
+
+    if (isNaN(tId)) {
+      return res.status(400).json({ message: 'Invalid transaction ID.' });
+    }
+    if (newStatus !== 'completed' && newStatus !== 'declined') {
+      return res.status(400).json({ message: "Invalid new status. Must be 'completed' or 'declined'." });
+    }
+
+    const updatedTransaction = await Transaction.verify({
+      transactionId: tId,
+      adminId,
+      newStatus,
+      adminNotes
+    });
+
+    // TODO: Log admin action using insertAdminLog
+    // await insertAdminLog({ adminId, action: 'VERIFY_TRANSACTION', targetTransactionId: tId, details: `Status set to ${newStatus}` });
+
+
+    res.status(200).json(updatedTransaction);
+  } catch (error) {
+    console.error('Error verifying transaction status:', error);
+    if (error.message.includes('Transaction not found') ||
+        error.message.includes('not in \'pending_verification\' status') ||
+        error.message.includes('Invalid new status')) {
+      return res.status(400).json({ message: error.message });
+    }
+    // Specific error for fulfillment failure if Transaction.verify throws it distinctly
+    if (error.message.includes('Fulfillment failed')) {
+        return res.status(500).json({ message: 'Transaction status updated, but an error occurred during service fulfillment. Please review manually.', error: error.message });
+    }
+    res.status(500).json({ message: 'Failed to verify transaction status', error: error.message });
+  }
+};
+
+// Withdrawal Management
+exports.getWithdrawalRequests = async (req, res) => {
+  try {
+      const { status } = req.query;
+      let requests;
+      if (status) {
+          requests = await WithdrawalRequest.getByStatus(status);
+      } else {
+          requests = await WithdrawalRequest.getAll();
+      }
+      res.json(requests);
+  } catch (error) {
+      console.error('Admin: Error fetching withdrawal requests:', error.message, error.stack);
+      res.status(500).json({ error: 'Failed to fetch withdrawal requests.' });
+  }
+};
+
+exports.updateWithdrawalRequestStatus = async (req, res) => {
+  try {
+      const { requestId } = req.params;
+      const { status, adminNotes } = req.body; // status: 'approved', 'processed', 'declined'
+      const adminId = req.user.id;
+
+      if (!status || !['approved', 'processed', 'declined'].includes(status)) {
+          return res.status(400).json({ error: 'Invalid status provided. Must be one of: approved, processed, declined.' });
+      }
+
+      const updatedRequest = await WithdrawalRequest.updateStatus({
+          requestId: parseInt(requestId),
+          newStatus: status,
+          adminId,
+          adminNotes
+      });
+
+      // Log admin action
+      await insertAdminLog({
+        adminId,
+        action: 'UPDATE_WITHDRAWAL_STATUS',
+        targetUserId: updatedRequest.user_id, // Assuming updatedRequest contains user_id
+        details: `Withdrawal request ID ${updatedRequest.id} status updated to ${status}. Notes: ${adminNotes || ''}`
+      });
+
+      res.json({ message: 'Withdrawal request status updated.', request: updatedRequest });
+  } catch (error) {
+      console.error('Admin: Error updating withdrawal request status:', error.message, error.stack);
+       if (error.message.includes('not found')) {
+          return res.status(404).json({ error: error.message });
+      }
+      if (error.message.includes('Insufficient balance')) { // Should only occur if refund fails
+          return res.status(500).json({ error: `Balance update failed during status change: ${error.message}`});
+      }
+      res.status(500).json({ error: 'Failed to update withdrawal request status.' });
   }
 };

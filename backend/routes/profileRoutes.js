@@ -2,7 +2,7 @@ const express = require('express');
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
-const { isAuthenticated } = require('../middleware/auth');
+const { isAuthenticated, isUser } = require('../middleware/auth'); // Added isUser
 const Profile = require('../models/Profile');
 
 const router = express.Router();
@@ -47,7 +47,7 @@ router.use((req, res, next) => {
 });
 
 // Upload profile picture
-router.post('/picture', isAuthenticated, upload.single('profilePicture'), async (req, res) => {
+router.post('/picture', isAuthenticated, isUser, upload.single('profilePicture'), async (req, res) => { // Added isUser
   console.log('Upload endpoint hit, file:', req.file);
   try {
     if (!req.file) {

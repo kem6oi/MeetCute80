@@ -47,10 +47,16 @@ class Profile {
     // 5. Have complete profiles
     // 6. Are not already matched with current user
     // 7. Have not been liked by other users (to hide users who liked current user)
+    // 8. Prioritize Elite users
     const result = await pool.query(
-      `SELECT p.*, u.id as user_id 
+      `SELECT
+           p.*,
+           u.id as user_id,
+           (COALESCE(sp.tier_level, 'Basic') = 'Elite') AS is_elite
        FROM profiles p
        JOIN users u ON p.user_id = u.id
+       LEFT JOIN user_subscriptions us ON u.id = us.user_id AND us.status = 'active'
+       LEFT JOIN subscription_packages sp ON us.package_id = sp.id
        WHERE u.id != $1 
          AND u.is_active = true
          AND u.role != 'admin'
@@ -67,7 +73,8 @@ class Profile {
            SELECT 1 FROM matches 
            WHERE (user1_id = $1 AND user2_id = u.id) OR (user1_id = u.id AND user2_id = $1)
          )
-       ORDER BY RANDOM() LIMIT $2`,
+       ORDER BY is_elite DESC, RANDOM()
+       LIMIT $2`,
       [userId, limit]
     );
     return result.rows;

@@ -1,60 +1,78 @@
 import { useState, useEffect } from 'react';
-import { FaHeart, FaComments, FaEye, FaArrowUp, FaBell, FaSpinner } from 'react-icons/fa';
+import { FaHeart, FaComments, FaEye, FaArrowUp, FaBell, FaSpinner, FaReceipt, FaCreditCard } from 'react-icons/fa'; // Added FaReceipt, FaCreditCard
 import Card from '../components/UI/Card';
 import api from '../utils/api';
 import { useNavigate } from 'react-router-dom';
-import { formatDistanceToNow } from 'date-fns';
+import { formatDistanceToNow, format } from 'date-fns'; // Added format
 import { useAuth } from '../context/AuthContext';
 
 const Dashboard = () => {
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(null);
+  const [loading, setLoading] = useState(true); // General loading for initial stats/activity
+  const [error, setError] = useState(null); // General error for initial stats/activity
   const [dashboardStats, setDashboardStats] = useState(null);
   const [activities, setActivities] = useState([]);
   const navigate = useNavigate();
   const { currentUser } = useAuth();
 
+  // State for Transactions
+  const [userTransactions, setUserTransactions] = useState([]);
+  const [isLoadingTransactions, setIsLoadingTransactions] = useState(true);
+  const [transactionsError, setTransactionsError] = useState(null);
+  const [transactionsPagination, setTransactionsPagination] = useState({
+    page: 1,
+    limit: 5,
+    totalCount: 0,
+  });
+
   useEffect(() => {
     const fetchDashboardData = async () => {
-      if (!currentUser || !currentUser.token) {
-        console.log('No authenticated user or missing token');
-        setError('Please log in to view your dashboard');
-        setLoading(false);
-        return;
-      }
+      if (!currentUser) return;
+
+      setLoading(true); // For stats and activities
+      setError(null);
       
       try {
-        setLoading(true);
-        setError(null);
-        
-        console.log('Fetching dashboard data with token:', currentUser.token.substring(0, 10) + '...');
-        
-        // Fetch stats and activity in parallel
         const [statsResponse, activitiesResponse] = await Promise.all([
           api.get('/api/dashboard/stats'),
           api.get('/api/dashboard/activity')
         ]);
-        
         setDashboardStats(statsResponse.data);
         setActivities(activitiesResponse.data);
       } catch (err) {
-        console.error('Error fetching dashboard data:', err);
-        if (err.response?.status === 401) {
-          setError('Authentication failed. Please log in again.');
-        } else {
-          setError('Failed to load dashboard data. Please try again.');
-        }
+        console.error('Error fetching initial dashboard data:', err);
+        setError(err.response?.data?.message || 'Failed to load dashboard summary.');
       } finally {
         setLoading(false);
       }
     };
 
+    const fetchUserTransactions = async () => {
+      if (!currentUser) return;
+
+      setIsLoadingTransactions(true);
+      setTransactionsError(null);
+      try {
+        const offset = (transactionsPagination.page - 1) * transactionsPagination.limit;
+        const response = await api.get('/api/transactions/my-transactions', {
+          params: { limit: transactionsPagination.limit, offset }
+        });
+        setUserTransactions(response.data.transactions || []);
+        setTransactionsPagination(prev => ({ ...prev, totalCount: response.data.totalCount || 0 }));
+      } catch (err) {
+        console.error('Error fetching user transactions:', err);
+        setTransactionsError(err.response?.data?.message || 'Failed to load transactions.');
+      } finally {
+        setIsLoadingTransactions(false);
+      }
+    };
+
     if (currentUser) {
       fetchDashboardData();
+      fetchUserTransactions();
     }
-  }, [currentUser]);
+  }, [currentUser, transactionsPagination.page]); // Re-fetch transactions when page changes
   
-  // If we're still loading or don't have stats yet, use placeholders
+  // If we're still loading initial data or don't have stats yet, use placeholders
   const stats = dashboardStats ? [
     { 
       title: 'Matches', 
@@ -241,6 +259,90 @@ const Dashboard = () => {
           ) : (
             <div className="p-5 text-center text-gray-500">
               <p>No recent activity to display</p>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Recent Transactions Section */}
+      <div>
+        <h3 className="section-title">
+          <FaReceipt className="mr-2 text-[var(--primary)]" />
+          My Recent Payments
+        </h3>
+        <div className="bg-white rounded-2xl shadow-lg overflow-hidden">
+          {isLoadingTransactions ? (
+            Array(3).fill(0).map((_, index) => (
+              <div key={index} className="p-5 border-b border-gray-100 last:border-0">
+                <div className="flex items-center justify-between">
+                  <div className="flex-1 space-y-2">
+                    <div className="w-1/2 h-5 bg-gray-200 animate-pulse rounded"></div>
+                    <div className="w-1/3 h-4 bg-gray-200 animate-pulse rounded"></div>
+                  </div>
+                  <div className="w-1/4 h-5 bg-gray-200 animate-pulse rounded"></div>
+                </div>
+              </div>
+            ))
+          ) : transactionsError ? (
+            <div className="p-5 text-center text-red-500">{transactionsError}</div>
+          ) : userTransactions.length === 0 ? (
+            <div className="p-5 text-center text-gray-500">
+              <p>You have no transactions yet.</p>
+            </div>
+          ) : (
+            userTransactions.map(tx => (
+              <div key={tx.id} className="p-5 border-b border-gray-100 last:border-0">
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-x-4 gap-y-2">
+                  <div className="md:col-span-2">
+                    <p className="font-semibold text-sm text-[var(--dark)]">
+                      {tx.itemName || `${tx.item_category} ID: ${tx.payable_item_id}`}
+                    </p>
+                    <p className="text-xs text-gray-500">
+                      {format(new Date(tx.created_at), 'PPpp')} {/* PPpp for long date and time */}
+                    </p>
+                  </div>
+                  <div className="text-sm md:text-right">
+                    <p className="font-semibold text-[var(--dark)]">{tx.currency} {tx.amount}</p>
+                    <p className={`
+                      ${tx.status === 'completed' ? 'text-green-500' : ''}
+                      ${tx.status === 'pending_verification' ? 'text-yellow-500' : ''}
+                      ${tx.status === 'pending_payment' ? 'text-orange-500' : ''}
+                      ${tx.status === 'declined' || tx.status === 'error' ? 'text-red-500' : ''}
+                      capitalize
+                    `}>
+                      {tx.status.replace('_', ' ')}
+                    </p>
+                  </div>
+                  <div className="col-span-1 md:col-span-3 text-xs text-gray-500 mt-1">
+                    Method: {tx.payment_method_name || 'N/A'} ({tx.payment_country_name}) <br />
+                    {(tx.status === 'pending_payment' || tx.status === 'pending_verification') && (
+                       <span>Reference: {tx.user_provided_reference || 'Not yet submitted'}</span>
+                    )}
+                  </div>
+                </div>
+              </div>
+            ))
+          )}
+          {/* Pagination for Transactions */}
+          {transactionsPagination.totalCount > transactionsPagination.limit && !isLoadingTransactions && !transactionsError && (
+            <div className="p-4 flex justify-between items-center border-t">
+              <button
+                onClick={() => setTransactionsPagination(prev => ({ ...prev, page: prev.page - 1 }))}
+                disabled={transactionsPagination.page === 1}
+                className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-50 disabled:opacity-50"
+              >
+                Previous
+              </button>
+              <span className="text-sm text-gray-700">
+                Page {transactionsPagination.page} of {Math.ceil(transactionsPagination.totalCount / transactionsPagination.limit)}
+              </span>
+              <button
+                onClick={() => setTransactionsPagination(prev => ({ ...prev, page: prev.page + 1 }))}
+                disabled={(transactionsPagination.page * transactionsPagination.limit) >= transactionsPagination.totalCount}
+                className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-50 disabled:opacity-50"
+              >
+                Next
+              </button>
             </div>
           )}
         </div>

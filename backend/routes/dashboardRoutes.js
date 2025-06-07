@@ -1,12 +1,12 @@
 const express = require('express');
 const router = express.Router();
-const { isAuthenticated } = require('../middleware/auth');
+const { isAuthenticated, isUser } = require('../middleware/auth'); // Added isUser
 const dashboardController = require('../controllers/dashboardController');
 
 // Get dashboard stats
-router.get('/stats', isAuthenticated, dashboardController.getUserStats);
+router.get('/stats', isAuthenticated, isUser, dashboardController.getUserStats); // Added isUser
 
 // Get recent activity
-router.get('/activity', isAuthenticated, dashboardController.getRecentActivity);
+router.get('/activity', isAuthenticated, isUser, dashboardController.getRecentActivity); // Added isUser
 
 module.exports = router;

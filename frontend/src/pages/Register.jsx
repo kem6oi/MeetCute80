@@ -1,12 +1,12 @@
 import { useState, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
-import { FaEnvelope, FaLock, FaHeart, FaPhone, FaGlobe } from 'react-icons/fa';
-import { useAuth } from '../context/AuthContext';
+import { useNavigate, Link } from 'react-router-dom';
+import { FaEnvelope, FaLock, FaHeart, FaPhone, FaGlobe, FaCheckCircle } from 'react-icons/fa';
+// import { useAuth } from '../context/AuthContext'; // No longer using auth.register for this page
 import api from '../utils/api';
 
 const Register = () => {
   const navigate = useNavigate();
-  const { register } = useAuth();
+  // const { register } = useAuth(); // No longer using auth.register for this page
   const [formData, setFormData] = useState({
     email: '',
     password: '',
@@ -19,6 +19,7 @@ const Register = () => {
   const [countries, setCountries] = useState([]);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+  const [showVerificationMessage, setShowVerificationMessage] = useState(false);
 
   const handleChange = (e) => {
     const { name, value, type, checked } = e.target;
@@ -69,14 +70,26 @@ const Register = () => {
 
     try {
       setLoading(true);
-      // Register with additional fields
-      await register(formData.email, formData.password, {
+      // Call API directly instead of using auth.register
+      const response = await api.post('/api/auth/register', {
+        email: formData.email,
+        password: formData.password,
         phone: formData.phone,
-        countryId: formData.countryId
+        countryId: formData.countryId,
       });
-      navigate('/profile-setup');
+
+      if (response.data && response.data.message) {
+        setShowVerificationMessage(true);
+      } else {
+        // Fallback error if backend response is not as expected
+        setError('Registration successful, but failed to get verification message. Please try logging in.');
+      }
     } catch (err) {
-      setError(err.message || 'Failed to create account');
+      if (err.response && err.response.data && err.response.data.error) {
+        setError(err.response.data.error);
+      } else {
+        setError(err.message || 'Failed to create account');
+      }
     } finally {
       setLoading(false);
     }
@@ -94,16 +107,31 @@ const Register = () => {
         </div>
         
         <div className="p-8">
-          {error && (
-            <div className="mb-4 p-3 bg-red-100 border border-red-400 text-red-700 rounded">
-              {error}
+          {showVerificationMessage ? (
+            <div className="text-center">
+              <FaCheckCircle className="text-5xl text-green-500 mx-auto mb-4" />
+              <h3 className="text-xl font-semibold text-[var(--text)] mb-2">Registration Successful!</h3>
+              <p className="text-[var(--text-light)]">
+                Please check your email inbox (and spam folder) for a verification link to activate your account.
+              </p>
+              <p className="mt-4">
+                <Link to="/login" className="text-[var(--primary)] hover:text-[var(--primary-dark)] font-medium">
+                  Back to Login
+                </Link>
+              </p>
             </div>
-          )}
-          
-          <form onSubmit={handleSubmit} className="space-y-4">
-            <div>
-              <label className="block text-sm font-medium text-[var(--text)] mb-1">Email</label>
-              <div className="relative">
+          ) : (
+            <>
+              {error && (
+                <div className="mb-4 p-3 bg-red-100 border border-red-400 text-red-700 rounded">
+                  {error}
+                </div>
+              )}
+
+              <form onSubmit={handleSubmit} className="space-y-4">
+                <div>
+                  <label className="block text-sm font-medium text-[var(--text)] mb-1">Email</label>
+                  <div className="relative">
                 <FaEnvelope className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400" />
                 <input
                   type="email"
@@ -210,8 +238,19 @@ const Register = () => {
               <a href="/login" className="font-medium text-[var(--primary)] hover:text-[var(--primary-dark)]">
                 Login
               </a>
-            </p>
-          </div>
+                </div>
+              </form>
+
+              <div className="mt-6 text-center">
+                <p className="text-sm text-[var(--text-light)]">
+                  Already have an account?{' '}
+                  <Link to="/login" className="font-medium text-[var(--primary)] hover:text-[var(--primary-dark)]">
+                    Login
+                  </Link>
+                </p>
+              </div>
+            </>
+          )}
         </div>
       </div>
     </div>

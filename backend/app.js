@@ -11,6 +11,9 @@ const subscriptionRoutes = require('./routes/subscriptionRoutes');
 const profileRoutes = require('./routes/profileRoutes');
 const matchRoutes = require('./routes/matchRoutes');
 const dashboardRoutes = require('./routes/dashboardRoutes');
+const boostRoutes = require('./routes/boostRoutes'); // Added
+const anonymousBrowsingRoutes = require('./routes/anonymousBrowsingRoutes'); // Added
+const videoChatRoutes = require('./routes/videoChatRoutes'); // Added
 
 const app = express();
 
@@ -57,6 +60,9 @@ app.use('/api/subscription', debugRoute('SUBSCRIPTION'), subscriptionRoutes);
 app.use('/api/profile', debugRoute('PROFILE'), profileRoutes);
 app.use('/api/matches', debugRoute('MATCHES'), matchRoutes);
 app.use('/api/dashboard', debugRoute('DASHBOARD'), dashboardRoutes);
+app.use('/api/boosts', debugRoute('BOOSTS'), boostRoutes); // Added
+app.use('/api/browse/anonymous', debugRoute('ANONYMOUS_BROWSING'), anonymousBrowsingRoutes); // Added
+app.use('/api/videochat', debugRoute('VIDEOCHAT'), videoChatRoutes); // Added
 
 // Debug any unmatched routes
 app.use((req, res, next) => {

@@ -12,7 +12,5 @@ module.exports = {
   DB_PASSWORD: process.env.DB_PASSWORD || 'postgres',
   DB_PORT: process.env.DB_PORT || 5432,
 
-  // Stripe Configuration
-  STRIPE_SECRET_KEY: process.env.STRIPE_SECRET_KEY || 'sk_test_your_stripe_test_key_here',
   FRONTEND_URL: process.env.FRONTEND_URL || 'http://localhost:5173'
 };
